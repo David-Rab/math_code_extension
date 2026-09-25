@@ -2,28 +2,45 @@ import * as vscode from 'vscode';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { randomBytes } from 'node:crypto';
-import { listSessions } from '@anthropic-ai/claude-agent-sdk';
-import { ChatSession } from './session';
+import { listSessions, renameSession, deleteSession, forkSession } from '@anthropic-ai/claude-agent-sdk';
+import { ChatSession, type SessionHost } from './session';
 import { WarmPool } from './warm';
 import { readConfig, log, setBundledExecutable, showLog } from './config';
 import { readBuildInfo, fetchLatest, newer, showChangelog, runUpdate, type Latest } from './updates';
+import { checkAuth, signIn } from './auth';
 
 const VIEW_TYPE = 'claudePanel.chat';
 const sessions = new Set<ChatSession>();
 const warm = new WarmPool();
 let extUri: vscode.Uri;
 let latest: Latest | undefined;
+let history: SessionsView;
+let lastActive: ChatSession | undefined;
+
+const host: SessionHost = {
+  openSession: (id, cwd, prefill) => openPanel(id, cwd, prefill),
+  sessionsChanged: () => setTimeout(() => history.refresh(), 500),
+};
 
 export function activate(ctx: vscode.ExtensionContext) {
   extUri = ctx.extensionUri;
   log(`activated from ${ctx.extensionPath} (VS Code ${vscode.version})`);
   setBundledExecutable(path.join(ctx.extensionPath, 'dist', 'bin', 'claude.exe'));
-  const history = new SessionsView();
+  history = new SessionsView();
 
   ctx.subscriptions.push(
     vscode.commands.registerCommand('claudePanel.newSession', () => openPanel()),
-    vscode.commands.registerCommand('claudePanel.openSession', (id?: string, cwd?: string) => (id ? openPanel(id, cwd) : pickSession())),
+    vscode.commands.registerCommand('claudePanel.openSession', (arg?: SessionEntry | string, cwd?: string) => {
+      if (typeof arg === 'string') return openPanel(arg, cwd);
+      if (arg?.id) return openPanel(arg.id, arg.cwd);
+      return pickSession();
+    }),
     vscode.commands.registerCommand('claudePanel.refreshSessions', () => history.refresh()),
+    vscode.commands.registerCommand('claudePanel.renameSession', (e?: SessionEntry) => renameCmd(e)),
+    vscode.commands.registerCommand('claudePanel.forkSession', (e?: SessionEntry) => forkCmd(e)),
+    vscode.commands.registerCommand('claudePanel.deleteSession', (e?: SessionEntry) => deleteCmd(e)),
+    vscode.commands.registerCommand('claudePanel.agentMap', () => lastActive?.panel.webview.postMessage({ t: 'showAgentMap' })),
+    vscode.commands.registerCommand('claudePanel.signIn', () => signIn()),
     vscode.commands.registerCommand('claudePanel.toggleMath', () => {
       const c = vscode.workspace.getConfiguration('claudePanel');
       return c.update('renderMath', !c.get('renderMath', true), vscode.ConfigurationTarget.Global);
@@ -31,6 +48,8 @@ export function activate(ctx: vscode.ExtensionContext) {
     vscode.commands.registerCommand('claudePanel.checkForUpdates', () => checkForUpdates(ctx, true)),
     vscode.commands.registerCommand('claudePanel.showLog', showLog),
     vscode.window.registerTreeDataProvider('claudePanel.sessions', history),
+    // VS Code restores open panels when a window is reopened or reloaded;
+    // the saved state carries the session id.
     vscode.window.registerWebviewPanelSerializer(VIEW_TYPE, {
       async deserializeWebviewPanel(panel, state: any) {
         attach(panel, state?.cwd ? normalizeCwd(state.cwd) : defaultCwd(), state?.sessionId);
@@ -53,6 +72,7 @@ export function activate(ctx: vscode.ExtensionContext) {
 
   // Start a spare claude.exe now so the first session opens quickly.
   warm.fill(defaultCwd());
+  void checkAuth().then((a) => log(`signed in: ${a?.loggedIn ?? 'unknown'}`));
   if (readConfig().checkForUpdates) setTimeout(() => void checkForUpdates(ctx, false), 15000);
 }
 
@@ -76,27 +96,41 @@ function defaultCwd(): string {
   return normalizeCwd(folder?.uri.fsPath ?? os.homedir());
 }
 
-function openPanel(resumeId?: string, cwd = defaultCwd()) {
+function openPanel(resumeId?: string, cwd = defaultCwd(), prefill?: string) {
   cwd = normalizeCwd(cwd);
   if (resumeId) {
     const open = [...sessions].find((s) => s.sessionId === resumeId);
     if (open) return open.panel.reveal();
   }
-  const panel = vscode.window.createWebviewPanel(VIEW_TYPE, 'Claude', { viewColumn: vscode.ViewColumn.Beside, preserveFocus: false }, { enableFindWidget: true, retainContextWhenHidden: true });
-  attach(panel, cwd, resumeId);
+  const panel = vscode.window.createWebviewPanel(
+    VIEW_TYPE,
+    'Claude',
+    { viewColumn: vscode.ViewColumn.Beside, preserveFocus: false },
+    { enableFindWidget: true, retainContextWhenHidden: true },
+  );
+  attach(panel, cwd, resumeId, prefill);
 }
 
-function attach(panel: vscode.WebviewPanel, cwd: string, resumeId?: string) {
+function attach(panel: vscode.WebviewPanel, cwd: string, resumeId?: string, prefill?: string) {
   const root = vscode.Uri.joinPath(extUri, 'dist', 'webview');
   panel.webview.options = { enableScripts: true, localResourceRoots: [root] };
   panel.iconPath = vscode.Uri.joinPath(extUri, 'resources', 'icon.svg');
   panel.webview.html = html(panel.webview, root);
   log(`panel opened: cwd=${cwd} resume=${resumeId ?? '-'}`);
-  const s = new ChatSession(panel, cwd, warm, resumeId);
+  const s = new ChatSession(panel, cwd, warm, host, resumeId, prefill);
   sessions.add(s);
-  panel.onDidDispose(() => sessions.delete(s));
+  const track = () => {
+    if (panel.active) lastActive = s;
+  };
+  track();
+  panel.onDidChangeViewState(track);
+  panel.onDidDispose(() => {
+    sessions.delete(s);
+    if (lastActive === s) lastActive = undefined;
+    history.refresh();
+  });
   if (latest) markUpdate(s);
-  void s.start();
+  void s.start().then(() => history.refresh());
 }
 
 function html(webview: vscode.Webview, root: vscode.Uri): string {
@@ -132,11 +166,11 @@ interface SessionEntry {
 }
 
 async function recentSessions(): Promise<SessionEntry[]> {
-  const folders = vscode.workspace.workspaceFolders?.map((f) => f.uri.fsPath) ?? [os.homedir()];
+  const folders = vscode.workspace.workspaceFolders?.map((f) => normalizeCwd(f.uri.fsPath)) ?? [os.homedir()];
   const out: SessionEntry[] = [];
   for (const dir of folders) {
     try {
-      for (const s of await listSessions({ dir, limit: 60 }))
+      for (const s of await listSessions({ dir, limit: 80 }))
         out.push({ id: s.sessionId, title: s.customTitle || s.summary || s.firstPrompt || s.sessionId, cwd: dir, modified: s.lastModified });
     } catch (e) {
       log(`listSessions(${dir}): ${(e as Error).message}`);
@@ -152,10 +186,51 @@ function ago(ms: number): string {
   return `${Math.round(m / 1440)} d ago`;
 }
 
-async function pickSession() {
+async function pickSession(placeHolder = 'Open a previous Claude session'): Promise<SessionEntry | undefined> {
   const items = (await recentSessions()).map((s) => ({ label: s.title, description: ago(s.modified), s }));
-  const pick = await vscode.window.showQuickPick(items, { placeHolder: 'Open a previous Claude session', matchOnDescription: true });
-  if (pick) openPanel(pick.s.id, pick.s.cwd);
+  const pick = await vscode.window.showQuickPick(items, { placeHolder, matchOnDescription: true });
+  if (pick && placeHolder.startsWith('Open')) openPanel(pick.s.id, pick.s.cwd);
+  return pick?.s;
+}
+
+/** The session a command applies to: the clicked sidebar item, else the active panel, else ask. */
+async function target(e: SessionEntry | undefined, verb: string): Promise<SessionEntry | undefined> {
+  if (e?.id) return e;
+  const s = lastActive;
+  if (s?.sessionId) return { id: s.sessionId, title: s.status.title ?? 'this session', cwd: s.cwd, modified: Date.now() };
+  return pickSession(`Choose a session to ${verb}`);
+}
+
+async function renameCmd(e?: SessionEntry) {
+  const t = await target(e, 'rename');
+  if (!t) return;
+  const title = await vscode.window.showInputBox({ prompt: 'New session name', value: t.title, validateInput: (v) => (v.trim() ? null : 'Enter a name') });
+  if (!title?.trim()) return;
+  await renameSession(t.id, title.trim(), { dir: t.cwd });
+  for (const s of sessions) if (s.sessionId === t.id) s.setTitleFromHost(title.trim());
+  history.refresh();
+}
+
+async function forkCmd(e?: SessionEntry) {
+  const t = await target(e, 'fork');
+  if (!t) return;
+  const r = await forkSession(t.id, { dir: t.cwd });
+  openPanel(r.sessionId, t.cwd);
+  history.refresh();
+}
+
+async function deleteCmd(e?: SessionEntry) {
+  const t = await target(e, 'delete');
+  if (!t) return;
+  const choice = await vscode.window.showWarningMessage(
+    `Delete the session “${t.title}”?`,
+    { modal: true, detail: 'Its conversation history is removed permanently. Files Claude changed are not affected.' },
+    'Delete',
+  );
+  if (choice !== 'Delete') return;
+  for (const s of [...sessions]) if (s.sessionId === t.id) s.panel.dispose();
+  await deleteSession(t.id, { dir: t.cwd });
+  history.refresh();
 }
 
 class SessionsView implements vscode.TreeDataProvider<SessionEntry> {
@@ -165,11 +240,13 @@ class SessionsView implements vscode.TreeDataProvider<SessionEntry> {
     this.changed.fire();
   }
   getTreeItem(s: SessionEntry): vscode.TreeItem {
+    const open = [...sessions].some((x) => x.sessionId === s.id);
     const item = new vscode.TreeItem(s.title, vscode.TreeItemCollapsibleState.None);
-    item.description = ago(s.modified);
+    item.description = (open ? 'open · ' : '') + ago(s.modified);
     item.tooltip = `${s.title}\n${new Date(s.modified).toLocaleString()}\n${s.cwd}`;
-    item.iconPath = new vscode.ThemeIcon([...sessions].some((x) => x.sessionId === s.id) ? 'comment-discussion' : 'comment');
-    item.command = { command: 'claudePanel.openSession', title: 'Open', arguments: [s.id, s.cwd] };
+    item.iconPath = new vscode.ThemeIcon(open ? 'comment-discussion' : 'comment');
+    item.contextValue = 'session';
+    item.command = { command: 'claudePanel.openSession', title: 'Open', arguments: [s] };
     return item;
   }
   getChildren(): Promise<SessionEntry[]> {

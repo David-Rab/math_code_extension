@@ -10,6 +10,7 @@ import {
   listSubagents,
   getSubagentMessages,
   getSessionInfo,
+  forkSession,
   type Query,
   type Options,
   type SDKUserMessage,
@@ -17,8 +18,11 @@ import {
   type PermissionUpdate,
   type CanUseTool,
 } from '@anthropic-ai/claude-agent-sdk';
+import { randomUUID } from 'node:crypto';
 import { Transcript, describeForPermission } from './transcript';
-import type { HostToView, Item, Status, ViewConfig, ViewToHost, Question } from './shared/protocol';
+import { knownAuth, onAuthChange, signIn } from './auth';
+import { notify } from './notify';
+import type { HostToView, ImageAttachment, Item, Status, ViewConfig, ViewToHost, Question } from './shared/protocol';
 import type { WarmPool } from './warm';
 import { readConfig, log, claudeExecutable } from './config';
 
@@ -44,6 +48,7 @@ export function buildOptions(cwd: string, hooks: () => SessionHooks | undefined,
     includePartialMessages: true,
     forwardSubagentText: true,
     perTaskStopAffordance: true,
+    enableFileCheckpointing: true, // needed for "rewind code"
     settingSources: ['user', 'project', 'local'],
     systemPrompt: { type: 'preset', preset: 'claude_code', append: VSCODE_CONTEXT },
     canUseTool: (name, input, ctx) => {
@@ -84,6 +89,12 @@ function permissionLabel(u: PermissionUpdate): string {
   }
 }
 
+/** What a session needs from the extension around it. */
+export interface SessionHost {
+  openSession(sessionId: string | undefined, cwd: string, prefill?: string): void;
+  sessionsChanged(): void;
+}
+
 export class ChatSession {
   readonly transcript: Transcript;
   status: Status;
@@ -96,26 +107,56 @@ export class ChatSession {
   private outbox: HostToView[] = [];
   private titleFetched = false;
 
+  private signInItem?: string;
+  private subs: vscode.Disposable[] = [];
+
   constructor(
     readonly panel: vscode.WebviewPanel,
     readonly cwd: string,
     private warm: WarmPool,
+    private host: SessionHost,
     private resumeId?: string,
+    private prefill?: string,
   ) {
     this.transcript = new Transcript((m) => this.post(m));
     this.status = { models: [], commands: [], remote: { state: 'off' }, busy: false, starting: true, sessionId: resumeId, cwd };
     panel.webview.onDidReceiveMessage((m: ViewToHost) => this.onView(m).catch((e) => this.fail(e)));
     panel.onDidDispose(() => this.dispose());
+    this.subs.push(onAuthChange((a) => (a.loggedIn ? this.onSignedIn() : this.needSignIn('You are signed out of Claude.'))));
   }
 
   get sessionId() {
     return this.status.sessionId;
   }
 
-  /** Load stored history (when resuming) and start the claude.exe process. */
+  /**
+   * Load stored history (when resuming) and start the claude.exe process. A
+   * reopened session that is not on screen (e.g. restored with the window)
+   * starts its process only when you first look at it.
+   */
   async start() {
+    if (knownAuth()?.loggedIn === false) this.needSignIn('You are signed out of Claude.');
     if (this.resumeId) await this.loadHistory(this.resumeId);
-    this.spawn();
+    if (!this.resumeId || this.panel.visible) {
+      this.spawn();
+      return;
+    }
+    this.status.starting = false;
+    this.pushStatus();
+    const sub = this.panel.onDidChangeViewState(() => {
+      if (!this.panel.visible || this.q || this.disposed) return;
+      sub.dispose();
+      this.spawn();
+    });
+    this.subs.push(sub);
+  }
+
+  /** Start the process if needed and wait until it accepts control requests. */
+  private async ensureProcess(): Promise<Query> {
+    if (!this.q) this.spawn();
+    const q = this.q!;
+    await q.initializationResult();
+    return q;
   }
 
   private async loadHistory(id: string) {
@@ -218,8 +259,11 @@ export class ChatSession {
     } else if (m.type === 'system' && m.subtype === 'status' && m.permissionMode) {
       this.status.permissionMode = m.permissionMode;
       this.pushStatus();
+    } else if (m.type === 'auth_status' && m.error) {
+      this.needSignIn(`Claude Code reported a sign-in problem: ${m.error}`);
     }
-    this.transcript.handle(m);
+    const r = this.transcript.handle(m);
+    if (r.auth) this.needSignIn(`Your Claude sign-in is no longer valid (${r.auth}).`);
   }
 
   private onTurnEnd(m: any) {
@@ -231,6 +275,44 @@ export class ChatSession {
     this.setBusy(false);
     void this.refreshContext();
     if (!this.titleFetched) void this.fetchTitle();
+    if (m.subtype === 'success') notify('done', `Claude finished${this.status.title ? `: ${this.status.title}` : ''}`, this.attended(), () => this.show('main'));
+  }
+
+  /** You are looking at this panel right now. */
+  private attended() {
+    return vscode.window.state.focused && this.panel.active;
+  }
+
+  private show(threadId: string) {
+    this.panel.reveal();
+    this.post({ t: 'focusThread', threadId });
+  }
+
+  // ---- sign-in -------------------------------------------------------------
+
+  private needSignIn(reason: string) {
+    if (this.signInItem && (this.transcript.findItem('main', this.signInItem) as any)?.state !== 'done') return;
+    this.signInItem = this.transcript.nextId('signin');
+    this.transcript.put('main', { kind: 'signin', id: this.signInItem, reason, state: 'pending' });
+    notify('needsYou', 'Claude needs you to sign in again', this.attended(), () => this.show('main'));
+  }
+
+  private async onSignedIn() {
+    if (!this.signInItem) return;
+    const item = this.transcript.findItem('main', this.signInItem);
+    if (item?.kind !== 'signin' || item.state === 'done') return;
+    this.transcript.put('main', { ...item, state: 'done' });
+    // Restart the process so it picks up the new credentials; the conversation continues.
+    if (this.q) {
+      const old = this.q;
+      this.q = undefined;
+      try {
+        old.close();
+      } catch {
+        /* already gone */
+      }
+      this.spawn();
+    }
   }
 
   private setBusy(busy: boolean) {
@@ -329,12 +411,14 @@ export class ChatSession {
         this.pending.set(id, { kind: 'permission', threadId, input, suggestions, resolve });
       }
       this.transcript.put(threadId, item);
+      const who = threadId === 'main' ? 'Claude' : `Subagent “${this.transcript.threads.get(threadId)?.title ?? ''}”`;
+      const what = item.kind === 'question' ? 'has a question for you' : item.kind === 'plan' ? 'wants you to approve a plan' : `needs your approval: ${toolName}`;
+      notify('needsYou', `${who} ${what}`, this.attended(), () => this.show(threadId));
       ctx.signal.addEventListener('abort', () => {
         if (!this.pending.delete(id)) return;
         this.transcript.put(threadId, { ...item, state: 'cancelled' } as Item);
         resolve({ behavior: 'deny', message: 'Cancelled.' });
       });
-      if (!this.panel.visible || !this.panel.active) this.panel.reveal(undefined, true);
     });
   };
 
@@ -352,9 +436,27 @@ export class ChatSession {
         this.viewReady = true;
         this.post({ t: 'snapshot', snapshot: { ...this.transcript.snapshotParts(), status: this.status, config: readConfig().view } }, true);
         for (const o of this.outbox.splice(0)) this.post(o);
+        if (this.prefill) {
+          this.post({ t: 'prefill', text: this.prefill });
+          this.prefill = undefined;
+        }
         return;
       case 'send':
-        return this.send(m.text);
+        return this.send(m.text, m.images);
+      case 'rewind':
+        return this.rewind(m.uuid, m.mode);
+      case 'signIn': {
+        if (this.signInItem) {
+          const it = this.transcript.findItem('main', this.signInItem);
+          if (it?.kind === 'signin') this.transcript.put('main', { ...it, state: 'working' });
+        }
+        const ok = await signIn();
+        if (!ok && this.signInItem) {
+          const it = this.transcript.findItem('main', this.signInItem);
+          if (it?.kind === 'signin') this.transcript.put('main', { ...it, state: 'pending' });
+        }
+        return;
+      }
       case 'interrupt':
         await this.q?.interrupt();
         return;
@@ -455,13 +557,76 @@ export class ChatSession {
     this.pushStatus();
   }
 
-  send(text: string) {
-    if (!text.trim()) return;
-    this.transcript.addUser(text);
-    this.queue.push({ type: 'user', message: { role: 'user', content: text }, parent_tool_use_id: null });
+  send(text: string, images: ImageAttachment[] = []) {
+    images = images.filter((i) => /^image\/(png|jpeg|gif|webp)$/.test(i.mediaType) && i.data.length < 7_000_000).slice(0, 10);
+    if (!text.trim() && !images.length) return;
+    const uuid = randomUUID();
+    this.transcript.addUser(text, uuid, images.map((i) => `data:${i.mediaType};base64,${i.data}`));
+    const content = images.length
+      ? [
+          ...images.map((i) => ({ type: 'image' as const, source: { type: 'base64' as const, media_type: i.mediaType, data: i.data } })),
+          ...(text.trim() ? [{ type: 'text' as const, text }] : []),
+        ]
+      : text;
+    this.queue.push({ type: 'user', uuid, message: { role: 'user', content }, parent_tool_use_id: null } as SDKUserMessage);
     this.setBusy(true);
     if (!this.q) this.spawn(); // process ended (crash or idle exit): resume the same conversation
     this.wake?.();
+  }
+
+  /**
+   * Rewind: "code" restores files to how they were when that message was sent,
+   * "fork" opens a new conversation branching just before it (with the
+   * message ready to edit), "both" does both. Files changed by hand or by
+   * shell commands are not tracked by Claude Code and are not restored.
+   */
+  private async rewind(uuid: string, mode: 'code' | 'fork' | 'both') {
+    const item = this.transcript.items.get('main')?.find((i) => i.kind === 'user' && i.uuid === uuid);
+    if (item?.kind !== 'user') return;
+    if (mode !== 'fork') {
+      if (this.status.busy) {
+        void vscode.window.showWarningMessage('Stop Claude before rewinding code.');
+        return;
+      }
+      const q = await this.ensureProcess();
+      const dry = await q.rewindFiles(uuid, { dryRun: true });
+      if (!dry.canRewind) {
+        void vscode.window.showErrorMessage(`Can't rewind code: ${dry.error ?? 'there is no checkpoint for this message'}.`);
+        return;
+      }
+      const files = dry.filesChanged ?? [];
+      if (!files.length) {
+        void vscode.window.showInformationMessage('No files were changed by Claude after this message.');
+      } else {
+        const rel = (f: string) => path.relative(this.cwd, f) || f;
+        const list = files.slice(0, 15).map(rel).join('\n') + (files.length > 15 ? `\n… and ${files.length - 15} more` : '');
+        const choice = await vscode.window.showWarningMessage(
+          `Restore ${files.length} file${files.length > 1 ? 's' : ''} to how ${files.length > 1 ? 'they were' : 'it was'} before this message?`,
+          { modal: true, detail: `${list}\n\n+${dry.insertions ?? 0} / −${dry.deletions ?? 0} lines. Changes made by hand or by shell commands are not undone.` },
+          'Rewind code',
+        );
+        if (choice !== 'Rewind code') return;
+        const r = await q.rewindFiles(uuid);
+        if (!r.canRewind) {
+          void vscode.window.showErrorMessage(`Rewind failed: ${r.error ?? 'unknown error'}`);
+          return;
+        }
+        this.transcript.notice('main', 'info', `Rewound code to before “${item.text.slice(0, 60)}${item.text.length > 60 ? '…' : ''}” (${files.length} file${files.length > 1 ? 's' : ''}).`);
+      }
+    }
+    if (mode !== 'code') {
+      let forkId: string | undefined;
+      if (item.forkPoint && this.sessionId) {
+        forkId = (await forkSession(this.sessionId, { dir: this.cwd, upToMessageId: item.forkPoint })).sessionId;
+      }
+      this.host.openSession(forkId, this.cwd, item.text);
+      this.host.sessionsChanged();
+    }
+  }
+
+  setTitleFromHost(title: string) {
+    this.titleFetched = true;
+    this.setTitle(title);
   }
 
   private fail(e: unknown) {
@@ -494,6 +659,7 @@ export class ChatSession {
   dispose() {
     if (this.disposed) return;
     this.disposed = true;
+    for (const d of this.subs) d.dispose();
     for (const [, p] of this.pending) p.resolve({ behavior: 'deny', message: 'Panel closed.' });
     this.pending.clear();
     this.wake?.();

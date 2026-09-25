@@ -12,7 +12,8 @@
   },
   "main": "./dist/extension.cjs",
   "activationEvents": [
-    "onStartupFinished"
+    "onStartupFinished",
+    "onWebviewPanel:claudePanel.chat"
   ],
   "contributes": {
     "commands": [
@@ -48,6 +49,35 @@
         "command": "claudePanel.showLog",
         "title": "Show Log",
         "category": "Claude Panel"
+      },
+      {
+        "command": "claudePanel.renameSession",
+        "title": "Rename Session…",
+        "category": "Claude Panel",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "claudePanel.forkSession",
+        "title": "Fork Session",
+        "category": "Claude Panel",
+        "icon": "$(repo-forked)"
+      },
+      {
+        "command": "claudePanel.deleteSession",
+        "title": "Delete Session…",
+        "category": "Claude Panel",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "claudePanel.agentMap",
+        "title": "Show Agent Map",
+        "category": "Claude Panel",
+        "icon": "$(type-hierarchy)"
+      },
+      {
+        "command": "claudePanel.signIn",
+        "title": "Sign In to Claude",
+        "category": "Claude Panel"
       }
     ],
     "viewsContainers": {
@@ -78,6 +108,50 @@
           "command": "claudePanel.refreshSessions",
           "when": "view == claudePanel.sessions",
           "group": "navigation@2"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "claudePanel.renameSession",
+          "when": "view == claudePanel.sessions && viewItem == session",
+          "group": "inline@1"
+        },
+        {
+          "command": "claudePanel.forkSession",
+          "when": "view == claudePanel.sessions && viewItem == session",
+          "group": "1_session@2"
+        },
+        {
+          "command": "claudePanel.renameSession",
+          "when": "view == claudePanel.sessions && viewItem == session",
+          "group": "1_session@1"
+        },
+        {
+          "command": "claudePanel.deleteSession",
+          "when": "view == claudePanel.sessions && viewItem == session",
+          "group": "9_delete@1"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "claudePanel.agentMap",
+          "when": "activeWebviewPanelId == claudePanel.chat",
+          "group": "navigation@1"
+        },
+        {
+          "command": "claudePanel.renameSession",
+          "when": "activeWebviewPanelId == claudePanel.chat",
+          "group": "1_session@1"
+        },
+        {
+          "command": "claudePanel.forkSession",
+          "when": "activeWebviewPanelId == claudePanel.chat",
+          "group": "1_session@2"
+        },
+        {
+          "command": "claudePanel.deleteSession",
+          "when": "activeWebviewPanelId == claudePanel.chat",
+          "group": "9_delete@1"
         }
       ]
     },
@@ -158,12 +232,52 @@
             "type": "string"
           },
           "markdownDescription": "Extra KaTeX macros, e.g. `{\"\\Gal\": \"\\operatorname{Gal}\"}`. Built in: `F`, `Q`, `C`, `E` as blackboard bold."
+        },
+        "claudePanel.sound": {
+          "type": "string",
+          "enum": [
+            "needsYou",
+            "needsYouAndDone",
+            "off"
+          ],
+          "enumDescriptions": [
+            "When Claude or a subagent needs your answer",
+            "Also when Claude finishes",
+            "Never"
+          ],
+          "default": "needsYou",
+          "description": "Play a sound (only when you are not looking at the panel). Your own Stop hook already plays a sound when Claude finishes."
+        },
+        "claudePanel.notification": {
+          "type": "string",
+          "enum": [
+            "needsYou",
+            "needsYouAndDone",
+            "off"
+          ],
+          "enumDescriptions": [
+            "When Claude or a subagent needs your answer",
+            "Also when Claude finishes",
+            "Never"
+          ],
+          "default": "needsYouAndDone",
+          "description": "Show a VS Code notification (only when you are not looking at the panel)."
+        },
+        "claudePanel.soundNeedsYou": {
+          "type": "string",
+          "default": "",
+          "description": "A .wav file for \"needs you\". Empty: Windows Notify Messaging."
+        },
+        "claudePanel.soundDone": {
+          "type": "string",
+          "default": "",
+          "description": "A .wav file for \"finished\". Empty: Windows chimes."
         }
       }
     }
   },
   "scripts": {
-    "test": "npm run -s replay && npm run -s test-md",
+    "test": "npm run -s replay && npm run -s unit && npm run -s test-md",
     "build": "node build.mjs",
     "watch": "node build.mjs --watch",
     "typecheck": "tsc --noEmit",
@@ -171,7 +285,8 @@
     "package": "node build.mjs --production && node test/smoke.cjs && vsce package --no-dependencies --skip-license --allow-missing-repository -o claude-panel.vsix",
     "test-md": "esbuild test/markdown.ts --bundle --platform=node --format=esm --outfile=.test/markdown.mjs --log-level=warning && node .test/markdown.mjs",
     "e2e": "esbuild test/e2e.ts --bundle --platform=node --format=esm --outfile=.test/e2e.mjs --log-level=warning --alias:vscode=./test/mock-vscode.ts --external:@anthropic-ai/claude-agent-sdk && node .test/e2e.mjs",
-    "harness": "esbuild test/harness.ts --bundle --platform=node --format=esm --outfile=.test/harness.mjs --log-level=warning --external:@anthropic-ai/claude-agent-sdk && node .test/harness.mjs"
+    "harness": "esbuild test/harness.ts --bundle --platform=node --format=esm --outfile=.test/harness.mjs --log-level=warning --external:@anthropic-ai/claude-agent-sdk && node .test/harness.mjs",
+    "unit": "esbuild test/unit.ts --bundle --platform=node --format=esm --outfile=.test/unit.mjs --log-level=warning && node .test/unit.mjs"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.3.282",

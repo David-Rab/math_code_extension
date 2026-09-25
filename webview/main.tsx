@@ -1,7 +1,7 @@
 import { render } from 'preact';
 import { memo } from 'preact/compat';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
-import type { HostToView, Item, Snapshot, Status, ThreadMeta, ViewConfig, ViewToHost, Question } from '../src/shared/protocol';
+import type { HostToView, ImageAttachment, Item, Snapshot, Status, ThreadMeta, Todo, ViewConfig, ViewToHost, Question } from '../src/shared/protocol';
 import { renderMarkdown, setRenderMath, setMacros, splitDraft } from './markdown';
 
 declare function acquireVsCodeApi(): { postMessage(m: unknown): void; getState(): any; setState(s: any): void };
@@ -15,22 +15,26 @@ const send = (m: ViewToHost) => vscode.postMessage(m);
 interface State extends Snapshot {
   active: string;
   unread: Record<string, boolean>;
+  showMap: boolean;
 }
 
 let state: State = {
   threads: [],
   items: {},
   drafts: {},
+  todos: {},
   status: { models: [], commands: [], remote: { state: 'off' }, busy: false, starting: true },
   config: { renderMath: true, toolActivity: 'summary', showThinking: false, enterToSend: true, mathMacros: {} },
   active: 'main',
   unread: {},
+  showMap: false,
 };
 let setVersion: (n: number) => void = () => {};
 let version = 0;
 let queue: HostToView[] = [];
 let scheduled = false;
 const fileListeners = new Set<(q: string, files: string[]) => void>();
+const prefillListeners = new Set<(text: string) => void>();
 
 window.addEventListener('error', (e) => send({ t: 'log', text: `error: ${e.message} at ${e.filename}:${e.lineno}` }));
 window.addEventListener('unhandledrejection', (e) => send({ t: 'log', text: `unhandled rejection: ${String(e.reason)}` }));
@@ -38,6 +42,10 @@ window.addEventListener('unhandledrejection', (e) => send({ t: 'log', text: `unh
 window.addEventListener('message', (e: MessageEvent<HostToView>) => {
   if (e.data.t === 'fileMatches') {
     for (const l of fileListeners) l(e.data.query, e.data.files);
+    return;
+  }
+  if (e.data.t === 'prefill') {
+    for (const l of prefillListeners) l(e.data.text);
     return;
   }
   queue.push(e.data);
@@ -64,7 +72,7 @@ function apply(s: State, m: HostToView): State {
     case 'snapshot': {
       const saved = vscode.getState() ?? {};
       const active = m.snapshot.threads.some((t) => t.id === saved.active) ? saved.active : 'main';
-      return { ...m.snapshot, active, unread: {} };
+      return { ...m.snapshot, todos: m.snapshot.todos ?? {}, active, unread: {}, showMap: s.showMap };
     }
     case 'thread': {
       const i = s.threads.findIndex((t) => t.id === m.thread.id);
@@ -89,6 +97,12 @@ function apply(s: State, m: HostToView): State {
       else drafts[m.threadId] = m.text;
       return { ...s, drafts };
     }
+    case 'todos':
+      return { ...s, todos: { ...s.todos, [m.threadId]: m.todos } };
+    case 'focusThread':
+      return s.threads.some((t) => t.id === m.threadId) ? { ...s, active: m.threadId, unread: { ...s.unread, [m.threadId]: false } } : s;
+    case 'showAgentMap':
+      return { ...s, showMap: true };
     case 'status':
       return { ...s, status: { ...s.status, ...m.status } };
     case 'config':
@@ -98,8 +112,13 @@ function apply(s: State, m: HostToView): State {
   }
 }
 
+function setShowMap(on: boolean) {
+  state = { ...state, showMap: on };
+  setVersion(++version);
+}
+
 function setActive(id: string) {
-  state = { ...state, active: id, unread: { ...state.unread, [id]: false } };
+  state = { ...state, active: id, showMap: false, unread: { ...state.unread, [id]: false } };
   vscode.setState({ ...(vscode.getState() ?? {}), active: id });
   setVersion(++version);
 }
@@ -123,6 +142,11 @@ function App() {
   }, [state.status.sessionId]);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'm') {
+        setShowMap(!state.showMap);
+        e.preventDefault();
+        return;
+      }
       if (!e.altKey || (e.key !== '[' && e.key !== ']' && !/^[1-9]$/.test(e.key))) return;
       const ids = state.threads.map((t) => t.id);
       let i = ids.indexOf(state.active);
@@ -143,7 +167,9 @@ function App() {
     <div class="app">
       <Tabs threads={s.threads} active={thread.id} unread={s.unread} items={s.items} />
       <ThreadView key={thread.id} thread={thread} items={s.items[thread.id] ?? []} draft={s.drafts[thread.id]} config={s.config} />
+      {s.showMap && <AgentMap threads={s.threads} items={s.items} active={thread.id} />}
       <Attention active={thread.id} />
+      <Progress todos={s.todos[thread.id] ?? []} threadId={thread.id} />
       <Composer status={s.status} thread={thread} config={s.config} />
       <StatusBar status={s.status} config={s.config} />
     </div>
@@ -160,6 +186,7 @@ function Tabs({ threads, active, unread, items }: { threads: ThreadMeta[]; activ
   if (threads.length < 2) return null;
   return (
     <div class="tabs" onWheel={(e) => ((e.currentTarget as HTMLElement).scrollLeft += (e as WheelEvent).deltaY)}>
+      <MapButton threads={threads} items={items} />
       {threads.map((t, i) => (
         <button
           key={t.id}
@@ -173,6 +200,152 @@ function Tabs({ threads, active, unread, items }: { threads: ThreadMeta[]; activ
           {needsYou(items[t.id]) ? <span class="badge-attn" title="Waiting for you">!</span> : unread[t.id] ? <span class="badge-unread" /> : null}
         </button>
       ))}
+    </div>
+  );
+}
+
+// --- agent map -----------------------------------------------------------------
+
+type MapState = 'waiting' | 'running' | 'failed' | 'idle';
+
+function mapState(threads: ThreadMeta[], items: Record<string, Item[]>): MapState {
+  if (threads.some((t) => needsYou(items[t.id]))) return 'waiting';
+  if (threads.some((t) => t.id !== 'main' && t.status === 'error')) return 'failed';
+  if (threads.some((t) => t.id !== 'main' && t.status === 'running')) return 'running';
+  return 'idle';
+}
+
+const MAP_TITLES: Record<MapState, string> = {
+  waiting: 'An agent is waiting for you · open the agent map',
+  running: 'Agents are working · open the agent map',
+  failed: 'An agent failed · open the agent map',
+  idle: 'Open the agent map',
+};
+
+function MapButton({ threads, items }: { threads: ThreadMeta[]; items: Record<string, Item[]> }) {
+  const st = mapState(threads, items);
+  const running = threads.filter((t) => t.id !== 'main' && t.status === 'running').length;
+  return (
+    <button class={`tab map-button ${st}`} title={MAP_TITLES[st] + ' (Ctrl+Shift+M)'} onClick={() => setShowMap(!state.showMap)}>
+      <span class="map-glyph">⌬</span>
+      <span class={`map-dot ${st}`} />
+      {running > 0 ? <span class="tab-title">{running}</span> : null}
+    </button>
+  );
+}
+
+function elapsed(t: ThreadMeta, now: number): string {
+  if (!t.startedAt) return '';
+  const s = Math.max(0, Math.round(((t.endedAt ?? now) - t.startedAt) / 1000));
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ${s % 60}s`;
+  return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
+}
+
+function AgentMap({ threads, items, active }: { threads: ThreadMeta[]; items: Record<string, Item[]>; active: string }) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    const esc = (e: KeyboardEvent) => e.key === 'Escape' && setShowMap(false);
+    window.addEventListener('keydown', esc);
+    return () => (clearInterval(t), window.removeEventListener('keydown', esc));
+  }, []);
+  const children = (id: string) => threads.filter((t) => t.id !== 'main' && (t.parentId ?? 'main') === id);
+  const actions = (id: string) => (items[id] ?? []).reduce((n, i) => n + (i.kind === 'tools' ? i.tools.length : 0), 0);
+  const node = (t: ThreadMeta): preact.JSX.Element => {
+    const kids = children(t.id);
+    const waiting = needsYou(items[t.id]);
+    return (
+      <li key={t.id}>
+        <div
+          class={`map-node ${t.id === active ? 'current' : ''} ${waiting ? 'waiting' : ''}`}
+          style={t.id === 'main' ? undefined : { '--agent-hue': String(hue(t.id)) }}
+          onClick={() => setActive(t.id)}
+          title="Open this tab"
+        >
+          <StatusDot status={t.status} />
+          <div class="map-text">
+            <div class="map-title">
+              {t.id === 'main' ? 'Main agent' : t.title}
+              {waiting && <span class="badge-attn">needs you</span>}
+            </div>
+            <div class="muted map-meta">
+              {[t.agentType, t.model, t.background ? 'background' : '', statusWord(t.status), t.id === 'main' ? '' : elapsed(t, now), `${actions(t.id)} actions`].filter(Boolean).join(' · ')}
+            </div>
+          </div>
+          {t.id !== 'main' && t.status === 'running' && t.taskId && (
+            <button
+              class="secondary small"
+              onClick={(e) => {
+                e.stopPropagation();
+                send({ t: 'stopTask', taskId: t.taskId! });
+              }}
+            >
+              Stop
+            </button>
+          )}
+        </div>
+        {kids.length > 0 && <ul>{kids.map(node)}</ul>}
+      </li>
+    );
+  };
+  const main = threads.find((t) => t.id === 'main');
+  const orphans = threads.filter((t) => t.id !== 'main' && t.parentId && !threads.some((p) => p.id === t.parentId));
+  return (
+    <div class="map-overlay" onClick={(e) => e.target === e.currentTarget && setShowMap(false)}>
+      <div class="map-card">
+        <div class="map-header">
+          <strong>Agent map</strong>
+          <span class="muted">{threads.length - 1} subagent{threads.length === 2 ? '' : 's'}</span>
+          <span class="grow" />
+          <button class="link" onClick={() => setShowMap(false)}>
+            Close (Esc)
+          </button>
+        </div>
+        <ul class="map-tree">
+          {main && node(main)}
+          {orphans.map(node)}
+        </ul>
+      </div>
+    </div>
+  );
+}
+
+// --- progress list ---------------------------------------------------------
+
+function Progress({ todos, threadId }: { todos: Todo[]; threadId: string }) {
+  const [open, setOpen] = useState(false);
+  if (!todos.length) return null;
+  const done = todos.filter((t) => t.status === 'completed').length;
+  const current = todos.find((t) => t.status === 'in_progress');
+  if (done === todos.length && !open) {
+    return (
+      <div class="progress done" onClick={() => setOpen(true)} title="Show the list">
+        ✓ All {todos.length} steps done
+      </div>
+    );
+  }
+  return (
+    <div class="progress" key={threadId}>
+      <button class="progress-line" onClick={() => setOpen(!open)} title={open ? 'Collapse' : 'Show the whole list'}>
+        <span class="progress-count">
+          {done}/{todos.length}
+        </span>
+        <span class="progress-bar">
+          <span style={{ width: `${(100 * done) / todos.length}%` }} />
+        </span>
+        <span class="progress-current">{current ? `▶ ${current.activeForm || current.content}` : 'Progress'}</span>
+        <span class="muted">{open ? '▾' : '▸'}</span>
+      </button>
+      {open && (
+        <ul class="progress-list">
+          {todos.map((t) => (
+            <li key={t.id} class={t.status}>
+              <span class="check">{t.status === 'completed' ? '☑' : t.status === 'in_progress' ? '▶' : '☐'}</span> {t.content}
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }
@@ -353,9 +526,23 @@ function Draft({ text, math }: { text: string; math: boolean }) {
 const ItemView = memo(function ItemView({ item, config }: { item: Item; config: ViewConfig }) {
   switch (item.kind) {
     case 'user':
+      return <UserMessage item={item} math={config.renderMath} />;
+    case 'signin':
       return (
-        <div class="msg user">
-          <Markdown text={item.text} math={config.renderMath} />
+        <div class={`card signin ${item.state === 'done' ? 'done' : 'pending'}`}>
+          <div class="card-title">{item.state === 'done' ? '✓ Signed in — you can continue.' : item.reason}</div>
+          {item.state !== 'done' && (
+            <>
+              <div class="muted">
+                Signing in runs Claude Code's own sign-in in a terminal and opens your browser; the panel never sees your password or tokens.
+              </div>
+              <div class="buttons">
+                <button disabled={item.state === 'working'} onClick={() => send({ t: 'signIn' })}>
+                  {item.state === 'working' ? 'Waiting for the browser sign-in…' : 'Sign in'}
+                </button>
+              </div>
+            </>
+          )}
         </div>
       );
     case 'text':
@@ -411,6 +598,58 @@ const ItemView = memo(function ItemView({ item, config }: { item: Item; config: 
       );
   }
 });
+
+function UserMessage({ item, math }: { item: Extract<Item, { kind: 'user' }>; math: boolean }) {
+  const [menu, setMenu] = useState(false);
+  useEffect(() => {
+    if (!menu) return;
+    const close = () => setMenu(false);
+    window.addEventListener('click', close);
+    return () => window.removeEventListener('click', close);
+  }, [menu]);
+  const rewind = (mode: 'code' | 'fork' | 'both') => {
+    setMenu(false);
+    if (item.uuid) send({ t: 'rewind', uuid: item.uuid, mode });
+  };
+  return (
+    <div class="msg user">
+      {item.images && (
+        <div class="images">
+          {item.images.map((src, i) => (
+            <img key={i} src={src} class="thumb" />
+          ))}
+        </div>
+      )}
+      {item.text && <Markdown text={item.text} math={math} />}
+      {item.uuid && (
+        <button
+          class="rewind"
+          title="Rewind to this message…"
+          onClick={(e) => {
+            e.stopPropagation();
+            setMenu(!menu);
+          }}
+        >
+          ↶
+        </button>
+      )}
+      {menu && (
+        <div class="rewind-menu" onClick={(e) => e.stopPropagation()}>
+          <div class="menu-item" onClick={() => rewind('fork')} title="Start a new conversation from just before this message, with it ready to edit">
+            Fork conversation from here
+          </div>
+          <div class="menu-item" onClick={() => rewind('code')} title="Restore files Claude changed to how they were when you sent this">
+            Rewind code to here
+          </div>
+          <div class="menu-item" onClick={() => rewind('both')}>
+            Fork conversation and rewind code
+          </div>
+          <div class="menu-note">Changes made by hand or by shell commands are not undone.</div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 const Markdown = ({ text, math }: { text: string; math: boolean }) => {
   const html = useMemo(() => renderMarkdown(text), [text, math]);
@@ -584,13 +823,49 @@ function Composer({ status, thread, config }: { status: Status; thread: ThreadMe
   const [menu, setMenu] = useState<{ kind: '/' | '@'; items: string[]; sel: number; start: number } | null>(null);
   const history = useRef<string[]>([]);
   const histPos = useRef(-1);
+  const [images, setImages] = useState<ImageAttachment[]>([]);
+  const [imageError, setImageError] = useState('');
 
   useEffect(() => {
     const onFiles = (_q: string, files: string[]) =>
       setMenu((m) => (m?.kind === '@' ? { ...m, items: files, sel: 0 } : m));
+    const onPrefill = (t: string) => {
+      update(t);
+      requestAnimationFrame(() => ref.current?.focus());
+    };
     fileListeners.add(onFiles);
-    return () => void fileListeners.delete(onFiles);
+    prefillListeners.add(onPrefill);
+    return () => {
+      fileListeners.delete(onFiles);
+      prefillListeners.delete(onPrefill);
+    };
   }, []);
+
+  const addFiles = async (files: File[]) => {
+    const imgs = files.filter((f) => /^image\/(png|jpeg|gif|webp)$/.test(f.type));
+    if (files.length && !imgs.length) setImageError('Only PNG, JPEG, GIF and WebP images can be attached.');
+    for (const f of imgs) {
+      try {
+        const att = await toAttachment(f);
+        setImages((cur) => (cur.length >= 10 ? cur : [...cur, att]));
+        setImageError('');
+      } catch (e) {
+        setImageError(String((e as Error).message ?? e));
+      }
+    }
+  };
+  const onPaste = (e: ClipboardEvent) => {
+    const files = [...(e.clipboardData?.items ?? [])].filter((i) => i.kind === 'file').map((i) => i.getAsFile()!).filter(Boolean);
+    if (!files.length) return;
+    e.preventDefault();
+    void addFiles(files);
+  };
+  const onDrop = (e: DragEvent) => {
+    const files = [...(e.dataTransfer?.files ?? [])];
+    if (!files.length) return;
+    e.preventDefault();
+    void addFiles(files);
+  };
   useLayoutEffect(() => {
     const el = ref.current!;
     el.style.height = 'auto';
@@ -628,11 +903,12 @@ function Composer({ status, thread, config }: { status: Status; thread: ThreadMe
 
   const submit = () => {
     const v = text.trim();
-    if (!v) return;
-    send({ t: 'send', text: v });
-    history.current.push(v);
+    if (!v && !images.length) return;
+    send({ t: 'send', text: v, images: images.length ? images : undefined });
+    if (v) history.current.push(v);
     histPos.current = -1;
     update('');
+    setImages([]);
     setActive('main');
   };
 
@@ -687,17 +963,75 @@ function Composer({ status, thread, config }: { status: Status; thread: ThreadMe
           ))}
         </div>
       )}
-      <textarea ref={ref} rows={1} value={text} placeholder={placeholder} onInput={(e) => update((e.target as HTMLTextAreaElement).value)} onKeyDown={onKey} />
+      {(images.length > 0 || imageError) && (
+        <div class="attachments">
+          {images.map((im, i) => (
+            <span key={i} class="attachment">
+              <img src={`data:${im.mediaType};base64,${im.data}`} />
+              <button class="remove" title="Remove" onClick={() => setImages(images.filter((_, j) => j !== i))}>
+                ×
+              </button>
+            </span>
+          ))}
+          {imageError && <span class="err">{imageError}</span>}
+        </div>
+      )}
+      <textarea
+        ref={ref}
+        rows={1}
+        value={text}
+        placeholder={placeholder}
+        onInput={(e) => update((e.target as HTMLTextAreaElement).value)}
+        onKeyDown={onKey}
+        onPaste={onPaste}
+        onDrop={onDrop}
+        onDragOver={(e) => e.preventDefault()}
+      />
       {status.busy ? (
         <button class="danger" title="Stop (Esc)" onClick={() => send({ t: 'interrupt' })}>
           ■ Stop
         </button>
       ) : null}
-      <button title={config.enterToSend ? 'Send (Enter)' : 'Send (Ctrl+Enter)'} disabled={!text.trim()} onClick={submit}>
+      <button title={config.enterToSend ? 'Send (Enter)' : 'Send (Ctrl+Enter)'} disabled={!text.trim() && !images.length} onClick={submit}>
         Send
       </button>
     </div>
   );
+}
+
+/**
+ * Read an image file for sending. Images larger than Claude uses anyway
+ * (longest side over 1568 px) are scaled down, which also keeps them under
+ * the API's size limit.
+ */
+async function toAttachment(f: File): Promise<ImageAttachment> {
+  const MAX = 1568;
+  const dataUrl = await new Promise<string>((res, rej) => {
+    const r = new FileReader();
+    r.onload = () => res(String(r.result));
+    r.onerror = () => rej(new Error('Could not read the image.'));
+    r.readAsDataURL(f);
+  });
+  const img = new Image();
+  await new Promise<void>((res, rej) => {
+    img.onload = () => res();
+    img.onerror = () => rej(new Error('Could not decode the image.'));
+    img.src = dataUrl;
+  });
+  const scale = Math.min(1, MAX / Math.max(img.naturalWidth, img.naturalHeight));
+  let type = f.type as ImageAttachment['mediaType'];
+  let out = dataUrl;
+  if (scale < 1 || f.size > 3_500_000) {
+    const c = document.createElement('canvas');
+    c.width = Math.max(1, Math.round(img.naturalWidth * scale));
+    c.height = Math.max(1, Math.round(img.naturalHeight * scale));
+    c.getContext('2d')!.drawImage(img, 0, 0, c.width, c.height);
+    type = type === 'image/jpeg' ? 'image/jpeg' : 'image/png';
+    out = c.toDataURL(type, 0.9);
+  }
+  const data = out.slice(out.indexOf(',') + 1);
+  if (data.length > 6_500_000) throw new Error('That image is too large to send, even after scaling down.');
+  return { mediaType: type, data };
 }
 
 // --- status bar ------------------------------------------------------------

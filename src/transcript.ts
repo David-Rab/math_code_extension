@@ -1,11 +1,15 @@
 // Turns the SDK message stream (live or loaded from history) into threads of
 // display items. Pure logic, no VS Code dependency, so it can be tested by
 // replaying recorded streams.
-import type { HostToView, Item, Snapshot, ThreadMeta, ToolCall } from './shared/protocol';
+import type { HostToView, Item, Snapshot, ThreadMeta, Todo, ToolCall } from './shared/protocol';
 
 type Emit = (msg: HostToView) => void;
 
 const AGENT_TOOLS = new Set(['Agent', 'Task']);
+// Claude's progress list. Shown as a checklist, not as tool activity.
+const TODO_TOOLS = new Set(['TodoWrite', 'TaskCreate', 'TaskUpdate', 'TaskList', 'TaskGet']);
+// Assistant-message errors that mean the login is no longer valid.
+const AUTH_ERRORS = new Set(['authentication_failed', 'oauth_org_not_allowed']);
 
 // Message kinds we understand but deliberately do not display. Anything not
 // handled and not listed here is shown as an "unsupported" card, so new
@@ -24,15 +28,34 @@ const IGNORED_SYSTEM = new Set([
   'commands_changed',
   'session_state_changed',
   'mirror_error',
+  'post_turn_summary', // status line for remote clients
+  'control_request_progress',
+  'worker_shutting_down',
+  'bridge_state', // read by the session for the remote-control indicator
 ]);
-const IGNORED_TYPES = new Set(['keep_alive', 'tool_progress', 'auth_status', 'prompt_suggestion', 'tool_use_summary']);
+const IGNORED_TYPES = new Set(['command_lifecycle', 'turn_preempted', 'keep_alive', 'tool_progress', 'auth_status', 'prompt_suggestion', 'tool_use_summary', 'rate_limit_event']);
+
+export interface HandleResult {
+  unknown?: boolean;
+  /** Set when the message shows the login is no longer valid. */
+  auth?: string;
+}
+
+function ts(m: any): number {
+  const t = m?.timestamp ? Date.parse(m.timestamp) : NaN;
+  return Number.isFinite(t) ? t : Date.now();
+}
 
 export class Transcript {
   readonly threads = new Map<string, ThreadMeta>();
   readonly items = new Map<string, Item[]>();
   readonly drafts = new Map<string, string>();
+  readonly todos = new Map<string, Todo[]>();
   private toolIndex = new Map<string, { threadId: string; itemId: string }>();
   private taskToThread = new Map<string, string>(); // task_id / agentId -> thread id
+  private pendingTaskCreates = new Map<string, { threadId: string; tempId: string }>();
+  /** uuid of the latest main-thread message: the fork point for the next user message. */
+  private lastUuid: string | undefined;
   private seq = 0;
 
   constructor(private emit: Emit = () => {}) {
@@ -44,6 +67,7 @@ export class Transcript {
       threads: [...this.threads.values()],
       items: Object.fromEntries(this.items),
       drafts: Object.fromEntries(this.drafts),
+      todos: Object.fromEntries(this.todos),
     };
   }
 
@@ -62,7 +86,7 @@ export class Transcript {
   ensureThread(id: string, meta: Partial<ThreadMeta>): ThreadMeta {
     let t = this.threads.get(id);
     if (!t) {
-      t = { id, title: 'Subagent', status: 'running', ...meta };
+      t = { id, title: 'Subagent', status: 'running', startedAt: Date.now(), ...meta };
       this.threads.set(id, t);
       this.items.set(id, []);
       this.emit({ t: 'thread', thread: t });
@@ -70,9 +94,13 @@ export class Transcript {
     return t;
   }
 
-  updateThread(id: string, patch: Partial<ThreadMeta>) {
+  updateThread(id: string, patch: Partial<ThreadMeta>, at = Date.now()) {
     const t = this.threads.get(id);
     if (!t) return;
+    if (patch.status && patch.status !== t.status) {
+      if (patch.status === 'running') patch = { ...patch, endedAt: undefined };
+      else if (t.status === 'running' && !patch.endedAt) patch = { ...patch, endedAt: at };
+    }
     Object.assign(t, patch);
     this.emit({ t: 'thread', thread: t });
   }
@@ -95,8 +123,10 @@ export class Transcript {
     this.put(threadId, { kind: 'notice', id: this.nextId('n'), level, text });
   }
 
-  addUser(text: string) {
-    this.put('main', { kind: 'user', id: this.nextId('u'), text });
+  /** A message you just sent. `uuid` is the id it is sent with, so it can be rewound or forked later. */
+  addUser(text: string, uuid?: string, images?: string[]) {
+    this.put('main', { kind: 'user', id: this.nextId('u'), text, uuid, forkPoint: this.lastUuid, images: images?.length ? images : undefined });
+    if (uuid) this.lastUuid = uuid;
   }
 
   /** The task a subagent was given, shown once at the top of its tab. */
@@ -125,23 +155,28 @@ export class Transcript {
    * transcript, where the user's own prompts must be shown (live, the view
    * adds them itself when you press send).
    */
-  handle(m: any, history = false): { unknown?: boolean } {
+  handle(m: any, history = false): HandleResult {
+    const r = this.dispatch(m, history);
+    if (m.uuid && !m.parent_tool_use_id && (m.type === 'user' || m.type === 'assistant')) this.lastUuid = m.uuid;
+    return r;
+  }
+
+  private dispatch(m: any, history: boolean): HandleResult {
     switch (m.type) {
       case 'stream_event':
         this.onStreamEvent(m);
         return {};
       case 'assistant':
-        this.onAssistant(m);
-        return {};
+        return this.onAssistant(m);
       case 'user':
         this.onUser(m, history);
         return {};
       case 'system':
         return this.onSystem(m);
       case 'result':
-        this.onResult(m);
-        return {};
-      case 'rate_limit_event':
+        return this.onResult(m);
+      case 'conversation_reset':
+        this.notice('main', 'info', m.trigger === 'clear' ? 'Conversation cleared — Claude starts fresh from here.' : 'Claude started a fresh conversation from here.');
         return {};
       default:
         if (IGNORED_TYPES.has(m.type)) return {};
@@ -163,7 +198,7 @@ export class Transcript {
       this.setDraft(threadId, (this.drafts.get(threadId) ?? '') + ev.delta.text);
   }
 
-  private onAssistant(m: any) {
+  private onAssistant(m: any): HandleResult {
     const threadId = this.threadOf(m.parent_tool_use_id);
     const content = Array.isArray(m.message?.content) ? m.message.content : [];
     for (const b of content) {
@@ -173,13 +208,15 @@ export class Transcript {
       } else if (b.type === 'thinking') {
         if (b.thinking?.trim()) this.put(threadId, { kind: 'thinking', id: this.nextId('k'), text: b.thinking });
       } else if (b.type === 'tool_use') {
-        this.onToolUse(threadId, b);
+        this.onToolUse(threadId, b, m);
       }
     }
+    if (m.error && AUTH_ERRORS.has(m.error)) return { auth: m.error };
     if (m.error) this.notice(threadId, 'error', `API error: ${m.error}`);
+    return {};
   }
 
-  private onToolUse(threadId: string, b: any) {
+  private onToolUse(threadId: string, b: any, m: any) {
     if (AGENT_TOOLS.has(b.name)) {
       const input = b.input ?? {};
       const title = input.description || input.name || 'Subagent';
@@ -190,10 +227,15 @@ export class Transcript {
         parentId: threadId,
         status: 'running',
         background: !!input.run_in_background,
+        startedAt: ts(m),
       });
       this.updateThread(b.id, { title, agentType: input.subagent_type, parentId: threadId });
       this.addPrompt(b.id, input.prompt);
       this.put(threadId, { kind: 'agent', id: `agent-${b.id}`, threadId: b.id, title, agentType: input.subagent_type });
+      return;
+    }
+    if (TODO_TOOLS.has(b.name)) {
+      this.onTodoTool(threadId, b);
       return;
     }
     const call: ToolCall = { id: b.id, name: b.name, summary: summarizeTool(b.name, b.input), status: 'running' };
@@ -210,23 +252,75 @@ export class Transcript {
     }
   }
 
+  // --- progress list ---------------------------------------------------------
+
+  private setTodos(threadId: string, todos: Todo[]) {
+    this.todos.set(threadId, todos);
+    this.emit({ t: 'todos', threadId, todos });
+  }
+
+  private onTodoTool(threadId: string, b: any) {
+    const input = b.input ?? {};
+    const cur = this.todos.get(threadId) ?? [];
+    if (b.name === 'TodoWrite' && Array.isArray(input.todos)) {
+      this.setTodos(
+        threadId,
+        input.todos.map((t: any, i: number) => ({ id: String(i + 1), content: String(t.content ?? ''), activeForm: t.activeForm, status: t.status ?? 'pending' })),
+      );
+    } else if (b.name === 'TaskCreate') {
+      const tempId = `pending-${b.id}`;
+      this.pendingTaskCreates.set(b.id, { threadId, tempId });
+      this.setTodos(threadId, [...cur, { id: tempId, content: String(input.subject ?? input.description ?? ''), activeForm: input.activeForm, status: 'pending' }]);
+    } else if (b.name === 'TaskUpdate' && input.taskId !== undefined) {
+      const id = String(input.taskId);
+      if (input.status === 'deleted') this.setTodos(threadId, cur.filter((t) => t.id !== id));
+      else
+        this.setTodos(
+          threadId,
+          cur.map((t) =>
+            t.id === id
+              ? { ...t, status: input.status ?? t.status, content: input.subject ?? t.content, activeForm: input.activeForm ?? t.activeForm }
+              : t,
+          ),
+        );
+    }
+  }
+
+  /** TaskCreate returns the real task id; swap it in for the placeholder. */
+  private onTaskCreated(toolUseId: string, b: any, m: any): boolean {
+    const p = this.pendingTaskCreates.get(toolUseId);
+    if (!p) return false;
+    this.pendingTaskCreates.delete(toolUseId);
+    const realId = m.tool_use_result?.task?.id ?? resultText(b.content).match(/#\s*(\w+)/)?.[1];
+    if (realId !== undefined) {
+      const list = this.todos.get(p.threadId) ?? [];
+      this.setTodos(p.threadId, list.map((t) => (t.id === p.tempId ? { ...t, id: String(realId) } : t)));
+    }
+    return true;
+  }
+
+  // --- user messages and tool results ---------------------------------------
+
   private onUser(m: any, history: boolean) {
     const threadId = this.threadOf(m.parent_tool_use_id);
     const content = m.message?.content;
     if (typeof content === 'string') {
-      this.onUserText(threadId, content, history, m);
+      this.onUserText(threadId, content, history, m, []);
       return;
     }
     if (!Array.isArray(content)) return;
     const texts: string[] = [];
+    const images: string[] = [];
     for (const b of content) {
       if (b.type === 'tool_result') this.onToolResult(b, m);
       else if (b.type === 'text') texts.push(b.text);
+      else if (b.type === 'image' && b.source?.type === 'base64' && /^image\/(png|jpeg|gif|webp)$/.test(b.source.media_type))
+        images.push(`data:${b.source.media_type};base64,${b.source.data}`);
     }
-    if (texts.length) this.onUserText(threadId, texts.join('\n'), history, m);
+    if (texts.length || images.length) this.onUserText(threadId, texts.join('\n'), history, m, images);
   }
 
-  private onUserText(threadId: string, text: string, history: boolean, m: any) {
+  private onUserText(threadId: string, text: string, history: boolean, m: any, images: string[]) {
     const local = text.match(/^<local-command-stdout>([\s\S]*)<\/local-command-stdout>$/);
     if (local) {
       if (local[1].trim()) this.notice(threadId, 'info', local[1].trim());
@@ -238,17 +332,18 @@ export class Transcript {
     }
     const note = text.match(/^<task-notification>[\s\S]*?<tool-use-id>([^<]+)<\/tool-use-id>[\s\S]*?<status>([^<]+)<\/status>/);
     if (note) {
-      if (this.threads.has(note[1])) this.updateThread(note[1], { status: mapTaskStatus(note[2]) });
+      if (this.threads.has(note[1])) this.updateThread(note[1], { status: mapTaskStatus(note[2]) }, ts(m));
       return;
     }
     if (m.isSynthetic || m.isMeta || /^<(command-name|command-message|system-reminder|task-notification)/.test(text)) return;
     // Live, the view already shows what you typed. A subagent's first user
     // message is its task, shown from the Agent call instead.
     if (!history || threadId !== 'main') return;
-    this.put('main', { kind: 'user', id: this.nextId('u'), text });
+    this.put('main', { kind: 'user', id: this.nextId('u'), text, uuid: m.uuid, forkPoint: this.lastUuid, images: images.length ? images : undefined });
   }
 
   private onToolResult(b: any, m: any) {
+    if (this.onTaskCreated(b.tool_use_id, b, m)) return;
     const ref = this.toolIndex.get(b.tool_use_id);
     if (ref) {
       const item = this.findItem(ref.threadId, ref.itemId);
@@ -266,17 +361,17 @@ export class Transcript {
         this.updateThread(thread.id, { background: true });
         return;
       }
-      this.updateThread(thread.id, { status: b.is_error ? 'error' : 'done' });
+      this.updateThread(thread.id, { status: b.is_error ? 'error' : 'done' }, ts(m));
     }
   }
 
-  private onSystem(m: any): { unknown?: boolean } {
+  private onSystem(m: any): HandleResult {
     switch (m.subtype) {
       case 'init':
         return {};
       case 'task_started': {
         if (!m.tool_use_id) return {};
-        const t = this.ensureThread(m.tool_use_id, { title: m.description || 'Subagent', agentType: m.subagent_type, status: 'running' });
+        const t = this.ensureThread(m.tool_use_id, { title: m.description || 'Subagent', agentType: m.subagent_type, status: 'running', startedAt: ts(m) });
         this.taskToThread.set(m.task_id, t.id);
         this.updateThread(t.id, { background: !!m.is_backgrounded, status: 'running', taskId: m.task_id });
         this.addPrompt(t.id, m.prompt);
@@ -285,7 +380,7 @@ export class Transcript {
       case 'task_updated': {
         const id = this.taskToThread.get(m.task_id);
         const s = m.patch?.status;
-        if (id && s) this.updateThread(id, { status: mapTaskStatus(s) });
+        if (id && s) this.updateThread(id, { status: mapTaskStatus(s) }, m.patch?.end_time ?? Date.now());
         return {};
       }
       case 'task_notification': {
@@ -315,7 +410,8 @@ export class Transcript {
       case 'model_refusal_no_fallback':
         this.notice('main', 'warn', m.message ?? m.subtype.replace(/_/g, ' '));
         return {};
-      case 'bridge_state':
+      case 'plugin_install':
+        if (m.status === 'failed') this.notice('main', 'warn', `Plugin ${m.name ?? ''} failed to install${m.error ? `: ${m.error}` : ''}`);
         return {};
       default:
         if (IGNORED_SYSTEM.has(m.subtype)) return {};
@@ -324,13 +420,15 @@ export class Transcript {
     }
   }
 
-  private onResult(m: any) {
+  private onResult(m: any): HandleResult {
     for (const [id, text] of this.drafts) if (text) this.put(id, { kind: 'text', id: this.nextId('t'), text });
     for (const id of [...this.drafts.keys()]) this.setDraft(id, null);
+    const detail = [...(m.errors ?? []), m.is_error ? m.result : ''].filter(Boolean).join('; ');
+    if (m.is_error && /authenticat|oauth|\/login|log in again|401|invalid api key/i.test(detail)) return { auth: detail };
     if (m.subtype !== 'success' && m.subtype !== 'error_during_execution') {
-      const why = (m.errors ?? []).join('; ') || m.subtype.replace(/_/g, ' ');
-      this.notice('main', 'error', `Turn ended: ${why}`);
+      this.notice('main', 'error', `Turn ended: ${detail || m.subtype.replace(/_/g, ' ')}`);
     } else if (m.is_error && m.result) this.notice('main', 'error', String(m.result));
+    return {};
   }
 }
 

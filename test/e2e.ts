@@ -3,8 +3,10 @@
 // Usage: npm run e2e -- <scratch work dir>
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { settings, FakePanel } from './mock-vscode';
-import { ChatSession } from '../src/session';
+import * as zlib from 'node:zlib';
+import { getSessionMessages, getSessionInfo, renameSession, deleteSession } from '@anthropic-ai/claude-agent-sdk';
+import { settings, shown, FakePanel } from './mock-vscode';
+import { ChatSession, type SessionHost } from '../src/session';
 import { WarmPool } from '../src/warm';
 import { setBundledExecutable } from '../src/config';
 
@@ -12,7 +14,46 @@ const work = process.argv[2];
 if (!work) throw new Error('pass a scratch work directory');
 fs.mkdirSync(work, { recursive: true });
 setBundledExecutable(path.resolve('node_modules/@anthropic-ai/claude-agent-sdk-win32-x64/claude.exe'));
-Object.assign(settings, { initialModel: 'haiku', initialPermissionMode: 'default', remoteControl: 'off', prewarm: false, toolActivity: 'summary' });
+Object.assign(settings, { initialModel: 'haiku', initialPermissionMode: 'default', remoteControl: 'off', prewarm: false, toolActivity: 'summary', sound: 'off', notification: 'needsYouAndDone' });
+
+// What the session asks the extension to open (forks).
+const opened: { id?: string; prefill?: string }[] = [];
+const host: SessionHost = { openSession: (id, _cwd, prefill) => void opened.push({ id, prefill }), sessionsChanged() {} };
+
+/** A solid-colour PNG, to test sending images. */
+function png(w: number, h: number, rgb: [number, number, number]): string {
+  const crcTable = Array.from({ length: 256 }, (_, n) => {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    return c >>> 0;
+  });
+  const crc = (b: Buffer) => {
+    let c = 0xffffffff;
+    for (const x of b) c = crcTable[(c ^ x) & 0xff] ^ (c >>> 8);
+    return (c ^ 0xffffffff) >>> 0;
+  };
+  const chunk = (type: string, data: Buffer) => {
+    const len = Buffer.alloc(4);
+    len.writeUInt32BE(data.length);
+    const td = Buffer.concat([Buffer.from(type), data]);
+    const c = Buffer.alloc(4);
+    c.writeUInt32BE(crc(td));
+    return Buffer.concat([len, td, c]);
+  };
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(w, 0);
+  ihdr.writeUInt32BE(h, 4);
+  ihdr[8] = 8;
+  ihdr[9] = 2;
+  const row = Buffer.concat([Buffer.from([0]), Buffer.from(Array.from({ length: w }, () => rgb).flat())]);
+  const raw = Buffer.concat(Array.from({ length: h }, () => row));
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk('IHDR', ihdr),
+    chunk('IDAT', zlib.deflateSync(raw)),
+    chunk('IEND', Buffer.alloc(0)),
+  ]).toString('base64');
+}
 
 const results: [string, boolean, string?][] = [];
 const check = (name: string, ok: boolean, detail?: string) => {
@@ -57,11 +98,11 @@ const texts = (s: ChatSession, thread = 'main') => items(s, thread).filter((i: a
 const warm = new WarmPool();
 const panel = new FakePanel();
 autoRespond(panel);
-const s = new ChatSession(panel as any, work, warm);
+const s = new ChatSession(panel as any, work, warm, host);
 await s.start();
 panel.fromView({ t: 'ready' });
 
-const PROMPT = `Do these steps in order:
+const PROMPT = `First use the TodoWrite tool to make a checklist of the four steps below, and keep it updated as you go. Then do these steps in order:
 1) Create a file named e2e.txt containing the word hi, using the Write tool.
 2) Use the AskUserQuestion tool to ask me which color I prefer, with the options Red and Blue.
 3) Use the Agent tool to launch one general-purpose subagent with description "e2e-sub" and prompt "Reply with exactly: the sub says $x^2$. Use no tools." Do not run it in the background; wait for its result.
@@ -98,6 +139,10 @@ check('version known', !!st.version, st.version);
 check('session id known', !!st.sessionId);
 console.log(`      status: model=${st.model} mode=${st.permissionMode} effort=${st.effort} ctx=${st.contextPercent}% cache=${st.cacheHitPercent}% 5h=${st.rateLimits?.fiveHour?.utilization}%`);
 
+check('progress list captured', (s.transcript.todos.get('main') ?? []).length >= 3, JSON.stringify(s.transcript.todos.get('main')));
+check('notification when Claude needed approval', shown.some((m) => m.level === 'info' && /needs your approval/.test(m.text)), JSON.stringify(shown));
+check('notification when Claude finished', shown.some((m) => m.level === 'info' && /Claude finished/.test(m.text)), JSON.stringify(shown));
+
 // ---------------------------------------------------------------- 2. controls
 panel.fromView({ t: 'setModel', value: 'sonnet' });
 await sleep(2500);
@@ -112,6 +157,22 @@ panel.fromView({ t: 'setModel', value: 'haiku' });
 panel.fromView({ t: 'setMode', value: 'default' });
 await sleep(2000);
 
+// ---------------------------------------------------------------- 2b. image
+panel.fromView({ t: 'send', text: 'What colour is this image? Answer with one word.', images: [{ mediaType: 'image/png', data: png(64, 64, [220, 20, 20]) }] });
+check('image turn finished', await waitIdle(s, 120000));
+const imgMsg: any = items(s).filter((i: any) => i.kind === 'user').pop();
+check('sent image shown in your message', imgMsg?.images?.length === 1);
+check('Claude saw the image', /red/i.test(texts(s).slice(-1)[0] ?? ''), texts(s).slice(-1)[0]);
+
+// ---------------------------------------------------------------- 2c. rewind code
+const firstUser: any = items(s).find((i: any) => i.kind === 'user');
+check('messages carry ids for rewind', !!firstUser?.uuid);
+check('e2e.txt exists before rewinding', fs.existsSync(path.join(work, 'e2e.txt')));
+panel.fromView({ t: 'rewind', uuid: firstUser.uuid, mode: 'code' });
+for (let i = 0; i < 60 && fs.existsSync(path.join(work, 'e2e.txt')); i++) await sleep(500);
+check('rewind code removed the file Claude created after that message', !fs.existsSync(path.join(work, 'e2e.txt')), JSON.stringify(shown.slice(-3)));
+check('rewind asked for confirmation first', shown.some((m) => m.level === 'warn' && /Restore 1 file/.test(m.text)), JSON.stringify(shown.slice(-3)));
+
 // ---------------------------------------------------------------- 3. stop
 panel.fromView({ t: 'send', text: 'Write a 600-word essay about prime numbers. Use no tools.' });
 await sleep(6000);
@@ -122,12 +183,28 @@ check('stop ends the turn', stopped, `after ${Date.now() - tStop}ms`);
 console.log(`      stopped in ${((Date.now() - tStop) / 1000).toFixed(1)}s`);
 check('stop shown in conversation', items(s).some((i: any) => i.kind === 'notice' && /Stopped/.test(i.text)));
 
+// ---------------------------------------------------------------- 3b. fork
+const essayMsg: any = items(s).filter((i: any) => i.kind === 'user').pop();
+panel.fromView({ t: 'rewind', uuid: essayMsg.uuid, mode: 'fork' });
+for (let i = 0; i < 60 && !opened.length; i++) await sleep(250);
+const fork = opened[0];
+check('fork opens a new session with your message ready to edit', !!fork?.id && fork.prefill === essayMsg.text, JSON.stringify(opened));
+if (fork?.id) {
+  const orig = await getSessionMessages(s.status.sessionId!, { dir: work });
+  const forked = await getSessionMessages(fork.id, { dir: work });
+  check('fork contains the conversation up to that message only', forked.length > 0 && forked.length < orig.length, `${forked.length} vs ${orig.length}`);
+  await renameSession(fork.id, 'e2e fork renamed', { dir: work });
+  check('rename a session', (await getSessionInfo(fork.id, { dir: work }))?.customTitle === 'e2e fork renamed');
+  await deleteSession(fork.id, { dir: work });
+  check('delete a session', !(await getSessionInfo(fork.id, { dir: work })));
+}
+
 // ---------------------------------------------------------------- 4. resume
 const sessionId = s.status.sessionId!;
 panel.dispose();
 await sleep(1000);
 const panel2 = new FakePanel();
-const s2 = new ChatSession(panel2 as any, work, warm, sessionId);
+const s2 = new ChatSession(panel2 as any, work, warm, host, sessionId);
 await s2.start();
 panel2.fromView({ t: 'ready' });
 const snap = panel2.posted.find((m) => m.t === 'snapshot');
@@ -136,6 +213,8 @@ const sub2 = [...s2.transcript.threads.values()].find((t) => t.title === 'e2e-su
 check('history: subagent tab rebuilt', !!sub2 && texts(s2, sub2.id).some((t) => /sub says/i.test(t)));
 check('history: your prompts shown', items(s2).some((i: any) => i.kind === 'user' && i.text.includes('e2e.txt')));
 check('history: replies shown', texts(s2).some((t) => /red/i.test(t)));
+check('history: sent image shown', items(s2).some((i: any) => i.kind === 'user' && i.images?.length === 1));
+check('history: progress list rebuilt', (s2.transcript.todos.get('main') ?? []).length >= 3);
 panel2.fromView({ t: 'send', text: 'Reply with only the word: resumed' });
 check('resumed session answers', await waitIdle(s2, 120000));
 check('resumed session remembers', texts(s2).some((t) => /resumed/i.test(t)) && s2.status.sessionId === sessionId, `${s2.status.sessionId} vs ${sessionId}`);
@@ -149,7 +228,7 @@ while (!warm.isReady(work) && Date.now() - tw < 90000) await sleep(250);
 check('spare process warmed', warm.isReady(work), `after ${(Date.now() - tw) / 1000}s`);
 console.log(`      warm-up took ${((Date.now() - tw) / 1000).toFixed(1)}s in the background`);
 const panel3 = new FakePanel();
-const s3 = new ChatSession(panel3 as any, work, warm);
+const s3 = new ChatSession(panel3 as any, work, warm, host);
 await s3.start();
 panel3.fromView({ t: 'ready' });
 const tSend = Date.now();

@@ -11,6 +11,15 @@ export interface ThreadMeta {
   status: ThreadStatus;
   background?: boolean;
   taskId?: string; // for stopping a background subagent
+  startedAt?: number;
+  endedAt?: number;
+}
+
+export interface Todo {
+  id: string;
+  content: string;
+  activeForm?: string;
+  status: 'pending' | 'in_progress' | 'completed';
 }
 
 export interface ToolCall {
@@ -24,7 +33,7 @@ export interface QuestionOption { label: string; description: string }
 export interface Question { question: string; header: string; options: QuestionOption[]; multiSelect: boolean }
 
 export type Item =
-  | { kind: 'user'; id: string; text: string }
+  | { kind: 'user'; id: string; text: string; uuid?: string; forkPoint?: string; images?: string[] }
   | { kind: 'text'; id: string; text: string }
   | { kind: 'thinking'; id: string; text: string }
   | { kind: 'tools'; id: string; tools: ToolCall[] }
@@ -41,7 +50,13 @@ export type Item =
   | { kind: 'question'; id: string; questions: Question[]; state: 'pending' | 'answered' | 'cancelled'; answers?: Record<string, string> }
   | { kind: 'plan'; id: string; plan: string; state: 'pending' | 'approved' | 'rejected' | 'cancelled' }
   | { kind: 'notice'; id: string; level: 'info' | 'warn' | 'error'; text: string }
-  | { kind: 'unknown'; id: string; label: string; raw: string };
+  | { kind: 'unknown'; id: string; label: string; raw: string }
+  | { kind: 'signin'; id: string; reason: string; state: 'pending' | 'working' | 'done' };
+
+export interface ImageAttachment {
+  mediaType: 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp';
+  data: string; // base64, no data: prefix
+}
 
 export interface ModelChoice {
   value: string;
@@ -87,6 +102,7 @@ export interface Snapshot {
   threads: ThreadMeta[];
   items: Record<string, Item[]>;
   drafts: Record<string, string>;
+  todos: Record<string, Todo[]>;
   status: Status;
   config: ViewConfig;
 }
@@ -98,11 +114,17 @@ export type HostToView =
   | { t: 'draft'; threadId: string; text: string | null }
   | { t: 'status'; status: Partial<Status> }
   | { t: 'config'; config: ViewConfig }
-  | { t: 'fileMatches'; query: string; files: string[] };
+  | { t: 'fileMatches'; query: string; files: string[] }
+  | { t: 'todos'; threadId: string; todos: Todo[] }
+  | { t: 'focusThread'; threadId: string }
+  | { t: 'prefill'; text: string }
+  | { t: 'showAgentMap' };
 
 export type ViewToHost =
   | { t: 'ready' }
-  | { t: 'send'; text: string }
+  | { t: 'send'; text: string; images?: ImageAttachment[] }
+  | { t: 'rewind'; uuid: string; mode: 'code' | 'fork' | 'both' }
+  | { t: 'signIn' }
   | { t: 'interrupt' }
   | { t: 'permission'; id: string; allow: boolean; suggestion?: number; message?: string }
   | { t: 'answer'; id: string; answers: Record<string, string> | null }

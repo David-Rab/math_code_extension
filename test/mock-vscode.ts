@@ -11,10 +11,20 @@ export const workspace = {
   openTextDocument: async () => ({}),
 };
 
+/** Everything shown to the user through VS Code messages, for assertions. */
+export const shown: { level: string; text: string }[] = [];
 export const window = {
+  state: { focused: false },
   createOutputChannel: () => ({ appendLine: (l: string) => process.env.E2E_LOG && console.log('  log:', l), show() {} }),
   showTextDocument: async () => undefined,
-  showErrorMessage: async () => undefined,
+  showErrorMessage: async (text: string) => void shown.push({ level: 'error', text }),
+  showInformationMessage: async (text: string) => void shown.push({ level: 'info', text }),
+  // Modal confirmations: answer with the first offered button.
+  showWarningMessage: async (text: string, ...rest: any[]) => {
+    shown.push({ level: 'warn', text });
+    return rest.find((r) => typeof r === 'string');
+  },
+  onDidCloseTerminal: () => ({ dispose() {} }),
 };
 
 export const commands = { executeCommand: async () => undefined };
@@ -48,6 +58,9 @@ export class FakePanel {
     },
     onDidReceiveMessage: (l: Listener<any>) => void this.onMsg.push(l),
   };
+  onDidChangeViewState(_l: Listener<any>) {
+    return { dispose() {} };
+  }
   onDidDispose(l: Listener<void>) {
     this.onDispose.push(l);
   }

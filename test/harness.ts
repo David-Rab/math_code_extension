@@ -34,6 +34,17 @@ const snapshot = {
   },
   config: { renderMath: process.env.MATH !== 'off', toolActivity: 'summary', showThinking: false, enterToSend: true },
 };
+if (process.env.DEMO) {
+  // Sample progress list, sign-in card and a running subagent, to screenshot those pieces.
+  snapshot.todos = { main: [
+    { id: '1', content: 'Read the paper', status: 'completed' },
+    { id: '2', content: 'Prove the lemma', activeForm: 'Proving the lemma', status: 'in_progress' },
+    { id: '3', content: 'Write up the section', status: 'pending' },
+  ] };
+  (snapshot.items.main as any[]).push({ kind: 'signin', id: 'demo-signin', reason: 'Your Claude sign-in is no longer valid (authentication_failed).', state: 'pending' });
+  const sub = snapshot.threads.find((x) => x.id !== 'main');
+  if (sub) Object.assign(sub, { status: 'running', endedAt: undefined, startedAt: Date.now() - 95_000 });
+}
 const active = [...t.threads.values()].find((x) => tabMatch && x.title.toLowerCase().includes(tabMatch.toLowerCase()))?.id ?? 'main';
 const itemCount = [...t.items.values()].reduce((n, l) => n + l.length, 0);
 
@@ -67,6 +78,7 @@ async function bench() {
   window.postMessage({ t: 'snapshot', snapshot: SNAP }, '*');
   report.firstRenderMs = Math.round((await until(() => document.querySelector('.thread') && document.querySelector('.thread').children.length > 0)) - t0);
   report.items = ${itemCount}; report.threads = ${t.threads.size};
+  if (${JSON.stringify(process.env.MAP ?? '')} === '1') { window.postMessage({ t: 'showAgentMap' }, '*'); await frame(); await frame(); }
   if (${JSON.stringify(process.env.BENCH ?? '')} !== '1') return out();
   // 2. switching through every tab and back
   const tabs = [...document.querySelectorAll('.tab')];

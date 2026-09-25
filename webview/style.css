@@ -132,7 +132,7 @@ pre.tex-raw { white-space: pre-wrap; }
 .card-title { margin-bottom: 4px; }
 .card .detail { font-family: var(--vscode-editor-font-family); font-size: 0.9em; white-space: pre-wrap; word-break: break-word; max-height: 240px; overflow: auto; margin: 4px 0; }
 .buttons { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
-button:not(.tab):not(.tools-line):not(.copy):not(.agent-link):not(.option):not(.link):not(.toggle):not(.update):not(.show-earlier):not(.jump) {
+button:not(.tab):not(.tools-line):not(.copy):not(.agent-link):not(.option):not(.link):not(.toggle):not(.update):not(.show-earlier):not(.jump):not(.progress-line):not(.rewind):not(.remove) {
   background: var(--vscode-button-background); color: var(--vscode-button-foreground);
   border: none; border-radius: 3px; padding: 4px 12px; cursor: pointer;
 }
@@ -187,3 +187,58 @@ a.stat { color: var(--vscode-textLink-foreground); cursor: pointer; text-decorat
 .remote.error { color: var(--vscode-errorForeground); }
 .update { background: var(--vscode-statusBarItem-prominentBackground, #3794ff33); color: var(--vscode-foreground); border: none; border-radius: 3px; padding: 0 6px; cursor: pointer; }
 .spin-text { animation: blink 1.4s ease-in-out infinite; }
+
+/* --- agent map --- */
+.map-button { gap: 5px; border-top: none !important; }
+.map-glyph { font-size: 1.1em; line-height: 1; }
+.map-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); opacity: 0.6; }
+.map-dot.running { background: var(--vscode-progressBar-background, #3794ff); opacity: 1; animation: blink 1.4s ease-in-out infinite; }
+.map-dot.waiting { background: var(--vscode-editorWarning-foreground, #cca700); opacity: 1; }
+.map-dot.failed { background: var(--vscode-errorForeground, #f14c4c); opacity: 1; }
+.map-overlay { position: fixed; inset: 0; z-index: 20; background: rgba(0, 0, 0, 0.35); display: flex; justify-content: center; align-items: flex-start; padding: 40px 16px; }
+.map-card { background: var(--vscode-editor-background); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: 0 8px 30px rgba(0,0,0,0.45); width: min(760px, 100%); max-height: 100%; overflow: auto; padding: 10px 14px 14px; }
+.map-header { display: flex; align-items: baseline; gap: 10px; margin-bottom: 8px; }
+.map-tree, .map-tree ul { list-style: none; margin: 0; padding: 0; }
+.map-tree ul { margin-left: 18px; padding-left: 14px; border-left: 1px solid var(--border); }
+.map-tree li { margin: 6px 0; position: relative; }
+.map-tree ul > li::before { content: ''; position: absolute; left: -14px; top: 18px; width: 12px; border-top: 1px solid var(--border); }
+.map-node { display: flex; align-items: center; gap: 10px; padding: 6px 10px; border-radius: var(--radius); background: var(--card); border: 1px solid var(--border); border-left: 4px solid hsl(var(--agent-hue, 210) 60% 55%); cursor: pointer; }
+.map-node:hover { border-color: var(--vscode-focusBorder); }
+.map-node.current { outline: 1px solid var(--vscode-focusBorder); }
+.map-node.waiting { border-color: var(--vscode-editorWarning-foreground, #cca700); }
+.map-text { flex: 1; min-width: 0; }
+.map-title { display: flex; gap: 8px; align-items: center; }
+.map-meta { font-size: 0.88em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* --- progress list --- */
+.progress { flex: none; padding: 4px 16px; border-top: 1px solid var(--border); font-size: 0.92em; }
+.progress.done { color: var(--muted); cursor: pointer; }
+.progress-line { display: flex; align-items: center; gap: 10px; width: 100%; background: none; border: none; padding: 0; cursor: pointer; text-align: left; }
+.progress-count { color: var(--muted); flex: none; }
+.progress-bar { flex: none; width: 70px; height: 5px; border-radius: 3px; background: var(--card); border: 1px solid var(--border); overflow: hidden; }
+.progress-bar > span { display: block; height: 100%; background: var(--vscode-progressBar-background, #3794ff); }
+.progress-current { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.progress-list { list-style: none; margin: 4px 0 2px; padding: 0 0 0 4px; max-height: 180px; overflow: auto; }
+.progress-list li { padding: 1px 0; }
+.progress-list li.completed { color: var(--muted); text-decoration: line-through; }
+.progress-list li.in_progress { font-weight: 600; }
+.check { display: inline-block; width: 1.2em; }
+
+/* --- images --- */
+.images { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 4px; }
+.thumb { max-height: 160px; max-width: 240px; border-radius: 4px; border: 1px solid var(--border); }
+.attachments { position: absolute; bottom: 100%; left: 12px; right: 12px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 6px; background: var(--vscode-editor-background); border: 1px solid var(--border); border-radius: var(--radius); }
+.attachment { position: relative; }
+.attachment img { height: 56px; border-radius: 4px; border: 1px solid var(--border); display: block; }
+.attachment .remove { position: absolute; top: -6px; right: -6px; width: 18px; height: 18px; border-radius: 50%; border: none; background: var(--vscode-badge-background, #616161); color: #fff; cursor: pointer; line-height: 16px; padding: 0; }
+
+/* --- rewind --- */
+.msg.user .rewind { position: absolute; top: 2px; left: -26px; opacity: 0; border: none; background: none; color: var(--muted); cursor: pointer; font-size: 1.05em; padding: 0 4px; }
+.msg.user:hover .rewind { opacity: 1; }
+.rewind-menu { position: absolute; right: 0; top: 100%; z-index: 15; min-width: 260px; margin-top: 4px; background: var(--vscode-editorSuggestWidget-background, var(--vscode-editor-background)); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: 0 4px 14px rgba(0,0,0,0.35); padding: 4px 0; }
+.rewind-menu .menu-item { font-family: var(--vscode-font-family); padding: 4px 12px; }
+.rewind-menu .menu-item:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.15)); }
+.menu-note { padding: 4px 12px 2px; font-size: 0.85em; color: var(--muted); border-top: 1px solid var(--border); margin-top: 4px; }
+
+/* --- sign-in --- */
+.card.signin.pending { border-color: var(--vscode-editorWarning-foreground, #cca700); }
