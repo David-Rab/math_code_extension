@@ -527,6 +527,8 @@ const ItemView = memo(function ItemView({ item, config }: { item: Item; config: 
   switch (item.kind) {
     case 'user':
       return <UserMessage item={item} math={config.renderMath} />;
+    case 'trust':
+      return <TrustCard item={item} />;
     case 'signin':
       return (
         <div class={`card signin ${item.state === 'done' ? 'done' : 'pending'}`}>
@@ -598,6 +600,39 @@ const ItemView = memo(function ItemView({ item, config }: { item: Item; config: 
       );
   }
 });
+
+function TrustCard({ item }: { item: Extract<Item, { kind: 'trust' }> }) {
+  const answer = (choice: 'trust' | 'notNow' | 'never') => send({ t: 'trust', id: item.id, choice });
+  if (item.state === 'trusted') return <div class="notice info">✓ You trust {item.folder}. Claude Code now uses its settings.</div>;
+  if (item.state === 'declined') return <div class="notice info">Not trusted: Claude Code ignores the settings in {item.folder}.</div>;
+  if (item.state === 'failed')
+    return (
+      <div class="notice warn">
+        Claude Code did not record the trust for {item.folder}. To trust it, open a terminal there, run “claude”, accept the question, then type /exit.
+      </div>
+    );
+  return (
+    <div class="card trust pending">
+      <div class="card-title">
+        Do you trust the files in <strong>{item.folder}</strong>?
+      </div>
+      <div class="muted">
+        Trusting lets Claude Code use this folder's own settings: permission rules and hooks in <code>.claude/</code>, and MCP servers in <code>.mcp.json</code>.
+        Hooks and MCP servers run programs, so only trust folders whose contents you know. Without trust, Claude Code still works here but ignores those
+        settings. Claude Code remembers the answer.
+      </div>
+      <div class="buttons">
+        <button onClick={() => answer('trust')}>Trust this folder</button>
+        <button class="secondary" onClick={() => answer('notNow')}>
+          Not now
+        </button>
+        <button class="secondary" onClick={() => answer('never')}>
+          Don't ask again for this folder
+        </button>
+      </div>
+    </div>
+  );
+}
 
 function UserMessage({ item, math }: { item: Extract<Item, { kind: 'user' }>; math: boolean }) {
   const [menu, setMenu] = useState(false);

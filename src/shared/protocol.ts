@@ -51,7 +51,8 @@ export type Item =
   | { kind: 'plan'; id: string; plan: string; state: 'pending' | 'approved' | 'rejected' | 'cancelled' }
   | { kind: 'notice'; id: string; level: 'info' | 'warn' | 'error'; text: string }
   | { kind: 'unknown'; id: string; label: string; raw: string }
-  | { kind: 'signin'; id: string; reason: string; state: 'pending' | 'working' | 'done' };
+  | { kind: 'signin'; id: string; reason: string; state: 'pending' | 'working' | 'done' }
+  | { kind: 'trust'; id: string; folder: string; state: 'pending' | 'trusted' | 'declined' | 'failed' };
 
 export interface ImageAttachment {
   mediaType: 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp';
@@ -125,6 +126,7 @@ export type ViewToHost =
   | { t: 'send'; text: string; images?: ImageAttachment[] }
   | { t: 'rewind'; uuid: string; mode: 'code' | 'fork' | 'both' }
   | { t: 'signIn' }
+  | { t: 'trust'; id: string; choice: 'trust' | 'notNow' | 'never' }
   | { t: 'interrupt' }
   | { t: 'permission'; id: string; allow: boolean; suggestion?: number; message?: string }
   | { t: 'answer'; id: string; answers: Record<string, string> | null }

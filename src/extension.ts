@@ -8,6 +8,7 @@ import { WarmPool } from './warm';
 import { readConfig, log, setBundledExecutable, showLog } from './config';
 import { readBuildInfo, fetchLatest, newer, showChangelog, runUpdate, type Latest } from './updates';
 import { checkAuth, signIn } from './auth';
+import { initTrust } from './trust';
 
 const VIEW_TYPE = 'claudePanel.chat';
 const sessions = new Set<ChatSession>();
@@ -27,6 +28,7 @@ export function activate(ctx: vscode.ExtensionContext) {
   log(`activated from ${ctx.extensionPath} (VS Code ${vscode.version})`);
   setBundledExecutable(path.join(ctx.extensionPath, 'dist', 'bin', 'claude.exe'));
   history = new SessionsView();
+  initTrust(ctx.globalState);
 
   ctx.subscriptions.push(
     vscode.commands.registerCommand('claudePanel.newSession', () => openPanel()),

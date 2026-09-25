@@ -294,7 +294,8 @@
     "test-md": "esbuild test/markdown.ts --bundle --platform=node --format=esm --outfile=.test/markdown.mjs --log-level=warning && node .test/markdown.mjs",
     "e2e": "esbuild test/e2e.ts --bundle --platform=node --format=esm --outfile=.test/e2e.mjs --log-level=warning --alias:vscode=./test/mock-vscode.ts --external:@anthropic-ai/claude-agent-sdk && node .test/e2e.mjs",
     "harness": "esbuild test/harness.ts --bundle --platform=node --format=esm --outfile=.test/harness.mjs --log-level=warning --external:@anthropic-ai/claude-agent-sdk && node .test/harness.mjs",
-    "unit": "esbuild test/unit.ts --bundle --platform=node --format=esm --outfile=.test/unit.mjs --log-level=warning && node .test/unit.mjs"
+    "unit": "esbuild test/unit.ts --bundle --platform=node --format=esm --outfile=.test/unit.mjs --log-level=warning && node .test/unit.mjs",
+    "trust-e2e": "esbuild test/trust-e2e.ts --bundle --platform=node --format=esm --outfile=.test/trust-e2e.mjs --log-level=warning --alias:vscode=./test/mock-vscode.ts --external:@anthropic-ai/claude-agent-sdk && node .test/trust-e2e.mjs"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.3.282",

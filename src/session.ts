@@ -22,6 +22,7 @@ import { randomUUID } from 'node:crypto';
 import { Transcript, describeForPermission } from './transcript';
 import { knownAuth, onAuthChange, signIn } from './auth';
 import { notify } from './notify';
+import { trustRoot, isTrusted, neverAsk, rememberNeverAsk } from './trust';
 import type { HostToView, ImageAttachment, Item, Status, ViewConfig, ViewToHost, Question } from './shared/protocol';
 import type { WarmPool } from './warm';
 import { readConfig, log, claudeExecutable } from './config';
@@ -111,6 +112,9 @@ export class ChatSession {
   private titleFetched = false;
 
   private signInItem?: string;
+  private trustItem?: string;
+  private trustGranted?: string; // folder to attest on the next launch
+  private trustRootDir?: string;
   private subs: vscode.Disposable[] = [];
 
   constructor(
@@ -140,6 +144,12 @@ export class ChatSession {
   async start() {
     if (knownAuth()?.loggedIn === false) this.needSignIn('You are signed out of Claude.');
     if (this.resumeId) await this.loadHistory(this.resumeId);
+    // An untrusted folder: ask first, and launch once you answer (or send a message).
+    if (await this.askTrustIfNeeded()) {
+      this.status.starting = false;
+      this.pushStatus();
+      return;
+    }
     if (!this.resumeId || this.panel.visible) {
       this.spawn();
       return;
@@ -189,11 +199,7 @@ export class ChatSession {
     // permission rules are then ignored, so the user gets extra prompts.
     if (!this.trustWarned && /has not been trusted/.test(d)) {
       this.trustWarned = true;
-      this.transcript.notice(
-        'main',
-        'warn',
-        `Claude Code hasn't trusted this folder yet, so the permission rules in its .claude/settings.json are ignored and you may get extra permission prompts. To trust it, run "claude" once in a terminal in ${this.cwd} and accept the prompt.`,
-      );
+      void this.askTrustIfNeeded(true);
     }
   }
 
@@ -201,10 +207,15 @@ export class ChatSession {
     this.status.starting = true;
     this.pushStatus();
     const input = this.inputStream();
-    const warm = this.resumeId ? undefined : this.warm.take(this.cwd, this.hooks());
-    this.q = warm
-      ? warm.query(input)
-      : query({ prompt: input, options: buildOptions(this.cwd, this.hooks, this.resumeId ? { resume: this.resumeId } : {}) });
+    const trust = this.trustGranted;
+    this.trustGranted = undefined;
+    const warm = this.resumeId || trust ? undefined : this.warm.take(this.cwd, this.hooks());
+    const extra: Partial<Options> = this.resumeId ? { resume: this.resumeId } : {};
+    // Claude Code's launch-time attestation that you accepted a trust dialog for this folder;
+    // Claude Code then records the trust itself. (Not in the SDK's published types yet.)
+    if (trust) (extra as any).workspaceTrust = { accepted: true, directory: trust };
+    this.q = warm ? warm.query(input) : query({ prompt: input, options: buildOptions(this.cwd, this.hooks, extra) });
+    if (trust) setTimeout(() => this.verifyTrust(trust), 8000);
     this.warm.refillSoon(this.cwd);
     void this.consume(this.q!);
     void this.loadControls();
@@ -289,6 +300,55 @@ export class ChatSession {
   private show(threadId: string) {
     this.panel.reveal();
     this.post({ t: 'focusThread', threadId });
+  }
+
+  // ---- folder trust --------------------------------------------------------
+
+  /** Show the trust card if this folder is untrusted and you have not said "don't ask". Returns true if shown. */
+  private async askTrustIfNeeded(fromWarning = false): Promise<boolean> {
+    if (this.trustItem) return false;
+    const root = (this.trustRootDir ??= await trustRoot(this.cwd));
+    const trusted = isTrusted(root);
+    if (trusted !== false && !fromWarning) return false;
+    if (neverAsk(root)) return false;
+    this.trustItem = this.transcript.nextId('trust');
+    this.transcript.put('main', { kind: 'trust', id: this.trustItem, folder: root, state: 'pending' });
+    return true;
+  }
+
+  private async answerTrust(id: string, choice: 'trust' | 'notNow' | 'never') {
+    const item = this.transcript.findItem('main', id);
+    if (item?.kind !== 'trust' || item.state !== 'pending') return;
+    if (choice === 'trust') {
+      this.transcript.put('main', { ...item, state: 'trusted' });
+      this.trustGranted = item.folder;
+      this.warm.discard(); // the spare started untrusted
+      if (this.q) this.restartProcess();
+      else this.spawn();
+      return;
+    }
+    if (choice === 'never') await rememberNeverAsk(item.folder);
+    this.transcript.put('main', { ...item, state: 'declined' });
+    if (!this.q) this.spawn();
+  }
+
+  /** Close the running claude.exe and start it again on the same conversation. */
+  private restartProcess() {
+    const old = this.q;
+    this.q = undefined;
+    try {
+      old?.close();
+    } catch {
+      /* already gone */
+    }
+    this.spawn();
+  }
+
+  private verifyTrust(folder: string) {
+    if (this.disposed || isTrusted(folder) !== false) return;
+    const item = this.trustItem && this.transcript.findItem('main', this.trustItem);
+    if (item && item.kind === 'trust') this.transcript.put('main', { ...item, state: 'failed' });
+    log(`trust attestation for ${folder} was not recorded`);
   }
 
   // ---- sign-in -------------------------------------------------------------
@@ -448,6 +508,8 @@ export class ChatSession {
         return this.send(m.text, m.images);
       case 'rewind':
         return this.rewind(m.uuid, m.mode);
+      case 'trust':
+        return this.answerTrust(m.id, m.choice);
       case 'signIn': {
         if (this.signInItem) {
           const it = this.transcript.findItem('main', this.signInItem);
