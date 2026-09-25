@@ -6,6 +6,7 @@ const watch = process.argv.includes('--watch');
 const prod = process.argv.includes('--production');
 
 fs.rmSync('dist/webview', { recursive: true, force: true });
+if (prod) for (const f of fs.readdirSync('dist', { withFileTypes: true })) if (f.isFile() && f.name.endsWith('.map')) fs.rmSync(`dist/${f.name}`);
 fs.mkdirSync('dist/webview', { recursive: true });
 // KaTeX stylesheet and fonts, served to the webview from disk.
 fs.cpSync('node_modules/katex/dist/katex.min.css', 'dist/webview/katex.min.css');

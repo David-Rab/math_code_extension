@@ -3,4 +3,4 @@
 !resources/**
 !package.json
 !README.md
-dist/**/*.map
+**/*.map
