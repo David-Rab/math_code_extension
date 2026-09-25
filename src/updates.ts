@@ -78,6 +78,6 @@ export function runUpdate(info: BuildInfo, latest: Latest) {
   const term = vscode.window.createTerminal({ name: 'Claude Panel update', cwd: info.sourceDir, shellPath: 'cmd.exe' });
   term.show();
   term.sendText(
-    `npm install @anthropic-ai/claude-agent-sdk@${latest.sdkVersion} --save-exact && npm run typecheck && npm run replay && npm run package && code --install-extension claude-panel.vsix --force && echo "Done: reload the window to use Claude Code ${latest.claudeCodeVersion}."`,
+    `npm install @anthropic-ai/claude-agent-sdk@${latest.sdkVersion} --save-exact && npm run typecheck && npm test && npm run package && code --install-extension claude-panel.vsix --force && echo "Done: reload the window to use Claude Code ${latest.claudeCodeVersion}."`,
   );
 }

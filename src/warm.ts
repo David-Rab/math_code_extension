@@ -26,6 +26,10 @@ export class WarmPool {
     return s.ready;
   }
 
+  isReady(cwd: string) {
+    return !!this.spare?.ready && this.spare.cwd === cwd;
+  }
+
   fill(cwd: string) {
     if (!readConfig().prewarm) return;
     if (this.spare?.cwd === cwd) return;
