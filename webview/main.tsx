@@ -607,8 +607,15 @@ function TrustCard({ item }: { item: Extract<Item, { kind: 'trust' }> }) {
   if (item.state === 'declined') return <div class="notice info">Not trusted: Claude Code ignores the settings in {item.folder}.</div>;
   if (item.state === 'failed')
     return (
-      <div class="notice warn">
-        Claude Code did not record the trust for {item.folder}. To trust it, open a terminal there, run “claude”, accept the question, then type /exit.
+      <div class="card trust failed">
+        <div class="card-title">Claude Code did not record the trust for {item.folder}.</div>
+        <div class="muted">
+          Try again (this restarts Claude Code for this session; the conversation continues). If it still fails: open a terminal there, run “claude”, accept
+          the question, then type /exit.
+        </div>
+        <div class="buttons">
+          <button onClick={() => answer('trust')}>Try again</button>
+        </div>
       </div>
     );
   return (

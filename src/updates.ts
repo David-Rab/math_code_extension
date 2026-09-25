@@ -26,7 +26,7 @@ export interface Latest {
 
 export async function fetchLatest(): Promise<Latest | undefined> {
   try {
-    const r = await fetch('https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk/latest', { signal: AbortSignal.timeout(10000) });
+    const r = await fetch('https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk/latest', { signal: AbortSignal.timeout(25000) });
     const j: any = await r.json();
     const sdkVersion = String(j.version ?? '');
     const claudeCodeVersion = String(j.claudeCodeVersion ?? j.version ?? '');

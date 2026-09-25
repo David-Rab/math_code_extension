@@ -215,7 +215,10 @@ export class ChatSession {
     // Claude Code then records the trust itself. (Not in the SDK's published types yet.)
     if (trust) (extra as any).workspaceTrust = { accepted: true, directory: trust };
     this.q = warm ? warm.query(input) : query({ prompt: input, options: buildOptions(this.cwd, this.hooks, extra) });
-    if (trust) setTimeout(() => this.verifyTrust(trust), 8000);
+    if (trust) {
+      log(`[${this.sessionId ?? 'new'}] launching with trust attestation for ${trust}`);
+      void this.verifyTrust(this.q!, trust);
+    }
     this.warm.refillSoon(this.cwd);
     void this.consume(this.q!);
     void this.loadControls();
@@ -318,7 +321,7 @@ export class ChatSession {
 
   private async answerTrust(id: string, choice: 'trust' | 'notNow' | 'never') {
     const item = this.transcript.findItem('main', id);
-    if (item?.kind !== 'trust' || item.state !== 'pending') return;
+    if (item?.kind !== 'trust' || (item.state !== 'pending' && item.state !== 'failed')) return;
     if (choice === 'trust') {
       this.transcript.put('main', { ...item, state: 'trusted' });
       this.trustGranted = item.folder;
@@ -344,8 +347,25 @@ export class ChatSession {
     this.spawn();
   }
 
-  private verifyTrust(folder: string) {
-    if (this.disposed || isTrusted(folder) !== false) return;
+  /**
+   * Claude Code records the trust while it initializes, which can take a while
+   * on a busy machine: wait for initialization, then check for up to 30 s.
+   */
+  private async verifyTrust(q: Query, folder: string) {
+    try {
+      await q.initializationResult();
+      log(`[${this.sessionId ?? 'new'}] initialized (trust requested)`);
+    } catch (e) {
+      log(`trust: initialization failed: ${(e as Error).message}`);
+    }
+    for (let i = 0; i < 15; i++) {
+      if (this.disposed || this.q !== q) return; // closed or restarted: that launch no longer matters
+      if (isTrusted(folder) !== false) {
+        log(`trust recorded for ${folder}`);
+        return;
+      }
+      await new Promise((r) => setTimeout(r, 2000));
+    }
     const item = this.trustItem && this.transcript.findItem('main', this.trustItem);
     if (item && item.kind === 'trust') this.transcript.put('main', { ...item, state: 'failed' });
     log(`trust attestation for ${folder} was not recorded`);

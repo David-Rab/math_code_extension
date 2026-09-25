@@ -75,7 +75,7 @@ export function activate(ctx: vscode.ExtensionContext) {
   // Start a spare claude.exe now so the first session opens quickly.
   warm.fill(defaultCwd());
   void checkAuth().then((a) => log(`signed in: ${a?.loggedIn ?? 'unknown'}`));
-  if (readConfig().checkForUpdates) setTimeout(() => void checkForUpdates(ctx, false), 15000);
+  if (readConfig().checkForUpdates) scheduleUpdateChecks(ctx, 15000);
 }
 
 export function deactivate() {
@@ -266,20 +266,33 @@ function markUpdate(s: ChatSession) {
   s.pushStatus();
 }
 
-async function checkForUpdates(ctx: vscode.ExtensionContext, manual: boolean) {
+/** Check shortly after startup, then every 6 hours; after a failed check, retry in 10 minutes. */
+function scheduleUpdateChecks(ctx: vscode.ExtensionContext, delay: number) {
+  const t = setTimeout(async () => {
+    const ok = await checkForUpdates(ctx, false);
+    scheduleUpdateChecks(ctx, ok ? 6 * 3600_000 : 10 * 60_000);
+  }, delay);
+  ctx.subscriptions.push({ dispose: () => clearTimeout(t) });
+}
+
+/** Returns false when npm could not be reached. */
+async function checkForUpdates(ctx: vscode.ExtensionContext, manual: boolean): Promise<boolean> {
   const info = readBuildInfo(ctx.extensionPath);
-  if (!info) return;
+  if (!info) return true;
   const l = await fetchLatest();
   if (!l) {
     if (manual) void vscode.window.showWarningMessage('Could not reach npm to check for Claude Code updates.');
-    return;
+    return false;
   }
   if (!newer(l.claudeCodeVersion, info.claudeCodeVersion)) {
     if (manual) void vscode.window.showInformationMessage(`Claude Panel is up to date (Claude Code ${info.claudeCodeVersion}).`);
-    return;
+    return true;
   }
+  // Notify once per new version, not on every periodic check.
+  const seen = latest?.claudeCodeVersion === l.claudeCodeVersion;
   latest = l;
   for (const s of sessions) markUpdate(s);
+  if (seen && !manual) return true;
   const choice = await vscode.window.showInformationMessage(
     `Claude Code ${l.claudeCodeVersion} is out — this panel bundles ${info.claudeCodeVersion}.`,
     'What changed?',
@@ -287,4 +300,5 @@ async function checkForUpdates(ctx: vscode.ExtensionContext, manual: boolean) {
   );
   if (choice === 'What changed?') await showChangelog(info.claudeCodeVersion, l.claudeCodeVersion);
   else if (choice === 'Update now') runUpdate(info, l);
+  return true;
 }
