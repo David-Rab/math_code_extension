@@ -209,6 +209,15 @@ export function splitDraft(src: string): { blocks: string[]; tail: string } {
   return { blocks, tail: cur.join('\n') };
 }
 
+// Images in replies are never loaded (the page's security policy blocks remote
+// images: loading one could leak data put into its URL). Show them as links.
+md.renderer.rules.image = (tokens, idx) => {
+  const t = tokens[idx];
+  const src = String(t.attrGet('src') ?? '');
+  const alt = t.content || 'image';
+  return `<a href="#" data-href="${escapeHtml(src)}" title="${escapeHtml(src)}" class="image-link">🖼 ${escapeHtml(alt)}</a>`;
+};
+
 const htmlCache = new Map<string, string>();
 /** Render markdown to HTML. Finished messages are cached; drafts pass cache=false. */
 export function renderMarkdown(src: string, cache = true): string {

@@ -41,6 +41,9 @@ export interface SessionHooks {
   stderr: (data: string) => void;
 }
 
+/** Permission modes the panel will ever set. Never bypassPermissions. */
+const SAFE_MODES = new Set(['default', 'acceptEdits', 'plan', 'auto', 'dontAsk']);
+
 export function buildOptions(cwd: string, hooks: () => SessionHooks | undefined, extra: Partial<Options> = {}): Options {
   const cfg = readConfig();
   const opts: Options = {
@@ -61,7 +64,7 @@ export function buildOptions(cwd: string, hooks: () => SessionHooks | undefined,
   const exe = claudeExecutable();
   if (exe && fs.existsSync(exe)) opts.pathToClaudeCodeExecutable = exe;
   if (cfg.initialModel && !opts.model) opts.model = cfg.initialModel;
-  if (cfg.initialPermissionMode && !opts.permissionMode) opts.permissionMode = cfg.initialPermissionMode as Options['permissionMode'];
+  if (SAFE_MODES.has(cfg.initialPermissionMode) && !opts.permissionMode) opts.permissionMode = cfg.initialPermissionMode as Options['permissionMode'];
   return opts;
 }
 
@@ -538,6 +541,10 @@ export class ChatSession {
   }
 
   private async setMode(mode: string) {
+    if (!SAFE_MODES.has(mode)) {
+      log(`refused permission mode ${JSON.stringify(mode).slice(0, 40)}`);
+      return;
+    }
     await this.q?.setPermissionMode(mode as any);
     this.status.permissionMode = mode;
     this.pushStatus();

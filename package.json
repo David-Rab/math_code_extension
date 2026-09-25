@@ -186,7 +186,8 @@
         "claudePanel.initialModel": {
           "type": "string",
           "default": "",
-          "description": "Model for new sessions (e.g. opus, sonnet, claude-fable-5-1). Empty: your Claude Code default."
+          "description": "Model for new sessions (e.g. opus, sonnet, claude-fable-5-1). Empty: your Claude Code default.",
+          "scope": "application"
         },
         "claudePanel.initialPermissionMode": {
           "type": "string",
@@ -198,7 +199,8 @@
             "auto"
           ],
           "default": "",
-          "description": "Permission mode for new sessions. Empty: your Claude Code default."
+          "description": "Permission mode for new sessions. Empty: your Claude Code default.",
+          "scope": "application"
         },
         "claudePanel.remoteControl": {
           "type": "string",
@@ -208,22 +210,26 @@
             "off"
           ],
           "default": "auto",
-          "description": "Turn on remote control when a session starts. auto: follow remoteControlAtStartup in ~/.claude/settings.json."
+          "description": "Turn on remote control when a session starts. auto: follow remoteControlAtStartup in ~/.claude/settings.json.",
+          "scope": "application"
         },
         "claudePanel.prewarm": {
           "type": "boolean",
           "default": true,
-          "description": "Keep one Claude Code process started in the background so new sessions open fast."
+          "description": "Keep one Claude Code process started in the background so new sessions open fast.",
+          "scope": "application"
         },
         "claudePanel.checkForUpdates": {
           "type": "boolean",
           "default": true,
-          "description": "Check npm for newer Claude Code releases at startup."
+          "description": "Check npm for newer Claude Code releases at startup.",
+          "scope": "application"
         },
         "claudePanel.claudeExecutable": {
           "type": "string",
           "default": "",
-          "description": "Path to a claude.exe to use instead of the bundled one."
+          "description": "Path to a claude.exe to use instead of the bundled one.",
+          "scope": "machine"
         },
         "claudePanel.mathMacros": {
           "type": "object",
@@ -266,12 +272,14 @@
         "claudePanel.soundNeedsYou": {
           "type": "string",
           "default": "",
-          "description": "A .wav file for \"needs you\". Empty: Windows Notify Messaging."
+          "description": "A .wav file for \"needs you\". Empty: Windows Notify Messaging.",
+          "scope": "application"
         },
         "claudePanel.soundDone": {
           "type": "string",
           "default": "",
-          "description": "A .wav file for \"finished\". Empty: Windows chimes."
+          "description": "A .wav file for \"finished\". Empty: Windows chimes.",
+          "scope": "application"
         }
       }
     }
@@ -300,5 +308,16 @@
     "@vscode/vsce": "^4.0.0",
     "esbuild": "^0.28.2",
     "typescript": "^7.0.2"
+  },
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "Sensitive settings (which claude.exe to run, permission mode, remote control) are only read from your user settings.",
+      "restrictedConfigurations": [
+        "claudePanel.claudeExecutable",
+        "claudePanel.initialPermissionMode",
+        "claudePanel.remoteControl"
+      ]
+    }
   }
 }

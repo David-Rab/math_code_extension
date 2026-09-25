@@ -140,7 +140,8 @@ function html(webview: vscode.Webview, root: vscode.Uri): string {
     `default-src 'none'`,
     `style-src ${webview.cspSource} 'unsafe-inline'`,
     `font-src ${webview.cspSource}`,
-    `img-src ${webview.cspSource} data: https:`,
+    // No remote images: a reply could embed data in an image URL and leak it just by being displayed.
+    `img-src ${webview.cspSource} data:`,
     `script-src 'nonce-${nonce}'`,
   ].join('; ');
   return `<!DOCTYPE html>
