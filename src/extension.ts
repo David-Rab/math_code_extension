@@ -33,7 +33,7 @@ export function activate(ctx: vscode.ExtensionContext) {
     vscode.window.registerTreeDataProvider('claudePanel.sessions', history),
     vscode.window.registerWebviewPanelSerializer(VIEW_TYPE, {
       async deserializeWebviewPanel(panel, state: any) {
-        attach(panel, state?.cwd || defaultCwd(), state?.sessionId);
+        attach(panel, state?.cwd ? normalizeCwd(state.cwd) : defaultCwd(), state?.sessionId);
       },
     }),
     vscode.workspace.onDidChangeConfiguration((e) => {
@@ -61,13 +61,23 @@ export function deactivate() {
   warm.dispose();
 }
 
+/**
+ * VS Code reports Windows paths with a lowercase drive letter; a terminal gives
+ * "C:". Claude Code keys folder trust by the exact spelling, so use the
+ * terminal form or a folder trusted from the terminal looks untrusted here.
+ */
+function normalizeCwd(p: string): string {
+  return /^[a-z]:/.test(p) ? p[0].toUpperCase() + p.slice(1) : p;
+}
+
 function defaultCwd(): string {
   const active = vscode.window.activeTextEditor?.document.uri;
   const folder = (active && vscode.workspace.getWorkspaceFolder(active)) ?? vscode.workspace.workspaceFolders?.[0];
-  return folder?.uri.fsPath ?? os.homedir();
+  return normalizeCwd(folder?.uri.fsPath ?? os.homedir());
 }
 
 function openPanel(resumeId?: string, cwd = defaultCwd()) {
+  cwd = normalizeCwd(cwd);
   if (resumeId) {
     const open = [...sessions].find((s) => s.sessionId === resumeId);
     if (open) return open.panel.reveal();

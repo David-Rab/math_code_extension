@@ -135,8 +135,23 @@ export class ChatSession {
 
   private hooks = (): SessionHooks => ({
     canUseTool: (name, input, ctx) => this.canUseTool(name, input, ctx),
-    stderr: (d) => log(`[${this.sessionId ?? 'new'}] ${d.trimEnd()}`),
+    stderr: (d) => this.onStderr(d),
   });
+
+  private trustWarned = false;
+  private onStderr(d: string) {
+    log(`[${this.sessionId ?? 'new'}] ${d.trimEnd()}`);
+    // Claude Code prints this when the folder was never trusted; project
+    // permission rules are then ignored, so the user gets extra prompts.
+    if (!this.trustWarned && /has not been trusted/.test(d)) {
+      this.trustWarned = true;
+      this.transcript.notice(
+        'main',
+        'warn',
+        `Claude Code hasn't trusted this folder yet, so the permission rules in its .claude/settings.json are ignored and you may get extra permission prompts. To trust it, run "claude" once in a terminal in ${this.cwd} and accept the prompt.`,
+      );
+    }
+  }
 
   private spawn() {
     this.status.starting = true;
