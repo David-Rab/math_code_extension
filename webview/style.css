@@ -52,7 +52,11 @@ button, select, input, textarea { font: inherit; color: inherit; }
 .spin { display: inline-block; animation: spin 1.2s linear infinite; }
 
 /* --- thread --- */
-.thread { flex: 1; overflow-y: auto; padding: var(--gap) 16px 24px; position: relative; overflow-anchor: none; }
+.thread {
+  flex: 1; overflow-y: auto; padding: var(--gap) 16px 24px; position: relative; overflow-anchor: none;
+  /* Own compositor layer with an opaque background: scrolling moves pixels instead of repainting every formula. */
+  background: var(--vscode-editor-background); will-change: scroll-position;
+}
 .thread > * + * { margin-top: var(--gap); }
 .msg { position: relative; max-width: 980px; }
 .msg.user {

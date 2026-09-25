@@ -489,7 +489,7 @@ export class ChatSession {
 
 async function updateViewConfig(patch: Partial<ViewConfig>) {
   const c = vscode.workspace.getConfiguration('claudePanel');
-  const keys: Record<keyof ViewConfig, string> = { renderMath: 'renderMath', toolActivity: 'toolActivity', showThinking: 'showThinking', enterToSend: 'enterToSend' };
+  const keys: Record<keyof ViewConfig, string> = { renderMath: 'renderMath', toolActivity: 'toolActivity', showThinking: 'showThinking', enterToSend: 'enterToSend', mathMacros: 'mathMacros' };
   for (const [k, v] of Object.entries(patch)) await c.update(keys[k as keyof ViewConfig], v, vscode.ConfigurationTarget.Global);
 }
 

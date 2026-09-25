@@ -80,6 +80,7 @@ export interface ViewConfig {
   toolActivity: 'hidden' | 'summary' | 'detailed';
   showThinking: boolean;
   enterToSend: boolean;
+  mathMacros: Record<string, string>;
 }
 
 export interface Snapshot {

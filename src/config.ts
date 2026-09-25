@@ -19,6 +19,7 @@ export function readConfig(): Config {
       toolActivity: c.get('toolActivity', 'summary'),
       showThinking: c.get('showThinking', false),
       enterToSend: c.get('enterToSend', true),
+      mathMacros: c.get('mathMacros', {}),
     },
     claudeExecutable: c.get('claudeExecutable', ''),
     initialModel: c.get('initialModel', ''),

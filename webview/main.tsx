@@ -2,7 +2,7 @@ import { render } from 'preact';
 import { memo } from 'preact/compat';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { HostToView, Item, Snapshot, Status, ThreadMeta, ViewConfig, ViewToHost, Question } from '../src/shared/protocol';
-import { renderMarkdown, setRenderMath } from './markdown';
+import { renderMarkdown, setRenderMath, setMacros, splitDraft } from './markdown';
 
 declare function acquireVsCodeApi(): { postMessage(m: unknown): void; getState(): any; setState(s: any): void };
 const vscode = acquireVsCodeApi();
@@ -22,7 +22,7 @@ let state: State = {
   items: {},
   drafts: {},
   status: { models: [], commands: [], remote: { state: 'off' }, busy: false, starting: true },
-  config: { renderMath: true, toolActivity: 'summary', showThinking: false, enterToSend: true },
+  config: { renderMath: true, toolActivity: 'summary', showThinking: false, enterToSend: true, mathMacros: {} },
   active: 'main',
   unread: {},
 };
@@ -52,6 +52,7 @@ function flush() {
   for (const m of batch) s = apply(s, m);
   state = s;
   setRenderMath(state.config.renderMath);
+  setMacros(state.config.mathMacros);
   setVersion(++version);
 }
 
@@ -202,41 +203,67 @@ function Attention({ active }: { active: string }) {
 
 // --- thread ----------------------------------------------------------------
 
-const PAGE = 150;
-const scrollMemory = new Map<string, number>();
+// Only the latest PAGE items render at first; earlier ones load as you scroll
+// up. Per-tab scroll position and page count survive switching tabs.
+const PAGE = 40;
+const FIRST = 8;
+const memory = new Map<string, { top: number; limit: number }>();
 
 function ThreadView({ thread, items, draft, config }: { thread: ThreadMeta; items: Item[]; draft?: string; config: ViewConfig }) {
   const ref = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
-  const [limit, setLimit] = useState(PAGE);
+  const anchor = useRef<number | null>(null); // distance from bottom to keep while loading earlier items
+  // A freshly opened tab draws its last few items first, then fills in up to
+  // PAGE in the background, so the view appears at once even for long sessions.
+  const [limit, setLimit] = useState(() => memory.get(thread.id)?.limit ?? FIRST);
   const [showJump, setShowJump] = useState(false);
-  const visible = items.length > limit ? items.slice(items.length - limit) : items;
+  const shown = useMemo(() => mergeActivity(items, config), [items, config.showThinking, config.toolActivity]);
+  const visible = shown.length > limit ? shown.slice(shown.length - limit) : shown;
+  const hidden = shown.length - visible.length;
+
+  const loadEarlier = (to = limit + PAGE) => {
+    const el = ref.current;
+    if (!el || hidden <= 0 || anchor.current !== null) return;
+    anchor.current = el.scrollHeight - el.scrollTop;
+    memory.set(thread.id, { top: el.scrollTop, limit: to });
+    setLimit(to);
+  };
+  useEffect(() => {
+    if (limit >= PAGE || hidden <= 0) return;
+    const t = setTimeout(() => loadEarlier(PAGE), 30);
+    return () => clearTimeout(t);
+  }, [limit, hidden > 0]);
 
   useLayoutEffect(() => {
     const el = ref.current!;
-    const saved = scrollMemory.get(thread.id);
-    if (saved !== undefined) {
-      el.scrollTop = saved;
-      stick.current = el.scrollHeight - el.clientHeight - saved < 40;
+    const saved = memory.get(thread.id);
+    if (saved) {
+      el.scrollTop = saved.top;
+      stick.current = el.scrollHeight - el.clientHeight - saved.top < 40;
+      setShowJump(!stick.current);
     } else el.scrollTop = el.scrollHeight;
   }, []);
   useLayoutEffect(() => {
     const el = ref.current!;
-    if (stick.current) el.scrollTop = el.scrollHeight;
+    if (anchor.current !== null) {
+      el.scrollTop = el.scrollHeight - anchor.current;
+      anchor.current = null;
+    } else if (stick.current) el.scrollTop = el.scrollHeight;
   });
   const onScroll = () => {
     const el = ref.current!;
     stick.current = el.scrollHeight - el.clientHeight - el.scrollTop < 40;
-    scrollMemory.set(thread.id, el.scrollTop);
+    memory.set(thread.id, { top: el.scrollTop, limit });
     if (showJump === stick.current) setShowJump(!stick.current);
+    if (el.scrollTop < 400) loadEarlier();
   };
 
   return (
     <div class="thread" ref={ref} onScroll={onScroll} onClick={onLinkClick}>
       {thread.id !== 'main' && <SubagentHeader thread={thread} />}
-      {items.length > limit && (
-        <button class="show-earlier" onClick={() => setLimit(limit + PAGE)}>
-          Show earlier ({items.length - limit} more)
+      {hidden > 0 && (
+        <button class="show-earlier" onClick={() => loadEarlier()}>
+          Show earlier ({hidden} more)
         </button>
       )}
       {visible.map((it) => (
@@ -251,6 +278,27 @@ function ThreadView({ thread, items, draft, config }: { thread: ThreadMeta; item
       )}
     </div>
   );
+}
+
+/**
+ * Drop items that render as nothing (hidden thinking / activity), and merge
+ * consecutive activity groups so a run of tool calls reads as one line.
+ */
+function mergeActivity(items: Item[], config: ViewConfig): Item[] {
+  const out: Item[] = [];
+  for (const it of items) {
+    if (it.kind === 'thinking' && !config.showThinking) continue;
+    if (it.kind === 'tools') {
+      if (config.toolActivity === 'hidden') continue;
+      const last = out[out.length - 1];
+      if (last?.kind === 'tools') {
+        out[out.length - 1] = { ...last, tools: [...last.tools, ...it.tools] };
+        continue;
+      }
+    }
+    out.push(it);
+  }
+  return out;
 }
 
 function onLinkClick(e: MouseEvent) {
@@ -283,11 +331,21 @@ function statusWord(s: ThreadMeta['status']) {
   return { running: 'running', done: 'finished', error: 'failed', stopped: 'stopped' }[s];
 }
 
-const Draft = ({ text, math }: { text: string; math: boolean }) => (
-  <div class="msg assistant streaming">
-    <div class="md" dangerouslySetInnerHTML={{ __html: renderMarkdown(text, false) + '<span class="caret"></span>' }} data-math={math} />
-  </div>
-);
+// Streaming reply: finished paragraphs render once (memoized, cached HTML);
+// only the paragraph being written re-renders per frame.
+const DraftBlock = memo(({ text }: { text: string; math: boolean }) => <div class="md" dangerouslySetInnerHTML={{ __html: renderMarkdown(text) }} />);
+
+function Draft({ text, math }: { text: string; math: boolean }) {
+  const { blocks, tail } = (window as any).__fullDraft ? { blocks: [], tail: text } : splitDraft(text); // __fullDraft: benchmark baseline
+  return (
+    <div class="msg assistant streaming">
+      {blocks.map((b, i) => (
+        <DraftBlock key={i} text={b} math={math} />
+      ))}
+      <div class="md" dangerouslySetInnerHTML={{ __html: renderMarkdown(tail, false) + '<span class="caret"></span>' }} />
+    </div>
+  );
+}
 
 const ItemView = memo(function ItemView({ item, config }: { item: Item; config: ViewConfig }) {
   switch (item.kind) {

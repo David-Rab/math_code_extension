@@ -11,6 +11,19 @@ export function setRenderMath(on: boolean) {
   renderMath = on;
 }
 
+// Blackboard-bold shorthands KaTeX lacks (it already has \R \Z \N), plus the user's own.
+const BUILTIN_MACROS: Record<string, string> = { '\\F': '\\mathbb{F}', '\\Q': '\\mathbb{Q}', '\\C': '\\mathbb{C}', '\\E': '\\mathbb{E}' };
+let macros: Record<string, string> = { ...BUILTIN_MACROS };
+let macrosKey = '';
+export function setMacros(user: Record<string, string> | undefined) {
+  const key = JSON.stringify(user ?? {});
+  if (key === macrosKey) return;
+  macrosKey = key;
+  macros = { ...BUILTIN_MACROS, ...(user ?? {}) };
+  texCache.clear();
+  htmlCache.clear();
+}
+
 const texCache = new Map<string, string>();
 function tex(src: string, display: boolean): string {
   if (!renderMath) {
@@ -21,7 +34,7 @@ function tex(src: string, display: boolean): string {
   let out = texCache.get(key);
   if (out === undefined) {
     try {
-      out = katex.renderToString(src, { displayMode: display, throwOnError: false, strict: 'ignore', output: 'html', trust: false });
+      out = katex.renderToString(src, { displayMode: display, throwOnError: false, strict: 'ignore', output: 'html', trust: false, macros: { ...macros } });
     } catch (e) {
       out = `<code class="tex-error" title="${escapeHtml(String((e as Error).message))}">${escapeHtml(src)}</code>`;
     }
@@ -158,6 +171,43 @@ md.renderer.rules.link_open = (tokens, idx, options, env, self) => {
   tokens[idx].attrSet('title', href);
   return defaultLinkOpen(tokens, idx, options, env, self);
 };
+
+/**
+ * Split streaming text into finished blocks and the block still being
+ * written. Finished blocks never change, so they render once; only the tail
+ * re-renders as tokens arrive. Boundaries are blank lines outside code
+ * fences and display math.
+ */
+export function splitDraft(src: string): { blocks: string[]; tail: string } {
+  const lines = src.split('\n');
+  const blocks: string[] = [];
+  let cur: string[] = [];
+  let fence: string | null = null;
+  let math: string | null = null; // closing delimiter while inside display math
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const t = line.trim();
+    if (fence) {
+      if (t.startsWith(fence)) fence = null;
+    } else if (math) {
+      if (t.includes(math)) math = null;
+    } else if (/^(```|~~~)/.test(t)) {
+      fence = t.slice(0, 3);
+    } else if (t.startsWith('$$') && !(t.length > 2 && t.slice(2).includes('$$'))) {
+      math = '$$';
+    } else if (t.startsWith('\\[') && !t.includes('\\]')) {
+      math = '\\]';
+    } else {
+      const env = t.match(/^\\begin\{([^}]+)\}/);
+      if (env && !t.includes(`\\end{${env[1]}}`)) math = `\\end{${env[1]}}`;
+    }
+    if (t === '' && !fence && !math && i < lines.length - 1) {
+      if (cur.length) blocks.push(cur.join('\n'));
+      cur = [];
+    } else cur.push(line);
+  }
+  return { blocks, tail: cur.join('\n') };
+}
 
 const htmlCache = new Map<string, string>();
 /** Render markdown to HTML. Finished messages are cached; drafts pass cache=false. */
