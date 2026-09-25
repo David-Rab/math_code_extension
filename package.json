@@ -1,16 +1,179 @@
 {
-  "name": "code_extension",
-  "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+  "name": "claude-panel",
+  "displayName": "Claude Panel (personal)",
+  "description": "Conversation-first Claude Code panel: subagent tabs, LaTeX rendering, full status bar.",
+  "version": "0.1.0",
+  "publisher": "david-local",
+  "private": true,
+  "license": "UNLICENSED",
+  "type": "module",
+  "engines": {
+    "vscode": "^1.94.0"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "type": "commonjs",
+  "main": "./dist/extension.cjs",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "claudePanel.newSession",
+        "title": "New Session",
+        "category": "Claude Panel",
+        "icon": "$(add)"
+      },
+      {
+        "command": "claudePanel.openSession",
+        "title": "Open Previous Session…",
+        "category": "Claude Panel",
+        "icon": "$(history)"
+      },
+      {
+        "command": "claudePanel.refreshSessions",
+        "title": "Refresh Sessions",
+        "category": "Claude Panel",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "claudePanel.toggleMath",
+        "title": "Toggle Math Rendering",
+        "category": "Claude Panel"
+      },
+      {
+        "command": "claudePanel.checkForUpdates",
+        "title": "Check for Claude Code Updates",
+        "category": "Claude Panel"
+      },
+      {
+        "command": "claudePanel.showLog",
+        "title": "Show Log",
+        "category": "Claude Panel"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "claudePanel",
+          "title": "Claude Panel",
+          "icon": "resources/activity.svg"
+        }
+      ]
+    },
+    "views": {
+      "claudePanel": [
+        {
+          "id": "claudePanel.sessions",
+          "name": "Sessions"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "claudePanel.newSession",
+          "when": "view == claudePanel.sessions",
+          "group": "navigation@1"
+        },
+        {
+          "command": "claudePanel.refreshSessions",
+          "when": "view == claudePanel.sessions",
+          "group": "navigation@2"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Claude Panel",
+      "properties": {
+        "claudePanel.renderMath": {
+          "type": "boolean",
+          "default": true,
+          "description": "Render LaTeX ($…$, $$…$$, \\(…\\), \\[…\\]) with KaTeX. Off shows the LaTeX source."
+        },
+        "claudePanel.toolActivity": {
+          "type": "string",
+          "enum": [
+            "hidden",
+            "summary",
+            "detailed"
+          ],
+          "default": "summary",
+          "description": "How much of Claude's tool activity to show between messages."
+        },
+        "claudePanel.showThinking": {
+          "type": "boolean",
+          "default": false,
+          "description": "Show Claude's thinking blocks (when the model returns them)."
+        },
+        "claudePanel.enterToSend": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enter sends (Shift+Enter for a newline). Off: Ctrl+Enter sends."
+        },
+        "claudePanel.initialModel": {
+          "type": "string",
+          "default": "",
+          "description": "Model for new sessions (e.g. opus, sonnet, claude-fable-5-1). Empty: your Claude Code default."
+        },
+        "claudePanel.initialPermissionMode": {
+          "type": "string",
+          "enum": [
+            "",
+            "default",
+            "acceptEdits",
+            "plan",
+            "auto"
+          ],
+          "default": "",
+          "description": "Permission mode for new sessions. Empty: your Claude Code default."
+        },
+        "claudePanel.remoteControl": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "on",
+            "off"
+          ],
+          "default": "auto",
+          "description": "Turn on remote control when a session starts. auto: follow remoteControlAtStartup in ~/.claude/settings.json."
+        },
+        "claudePanel.prewarm": {
+          "type": "boolean",
+          "default": true,
+          "description": "Keep one Claude Code process started in the background so new sessions open fast."
+        },
+        "claudePanel.checkForUpdates": {
+          "type": "boolean",
+          "default": true,
+          "description": "Check npm for newer Claude Code releases at startup."
+        },
+        "claudePanel.claudeExecutable": {
+          "type": "string",
+          "default": "",
+          "description": "Path to a claude.exe to use instead of the bundled one."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "test": "npm run -s replay && npm run -s test-md",
+    "build": "node build.mjs",
+    "watch": "node build.mjs --watch",
+    "typecheck": "tsc --noEmit",
+    "replay": "esbuild test/replay.ts --bundle --platform=node --format=esm --outfile=.test/replay.mjs --log-level=warning && node .test/replay.mjs",
+    "package": "node build.mjs --production && vsce package --no-dependencies --skip-license --allow-missing-repository -o claude-panel.vsix",
+    "test-md": "esbuild test/markdown.ts --bundle --platform=node --format=esm --outfile=.test/markdown.mjs --log-level=warning && node .test/markdown.mjs"
+  },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.3.282"
+    "@anthropic-ai/claude-agent-sdk": "0.3.282",
+    "katex": "^0.18.9",
+    "markdown-it": "^15.0.2",
+    "preact": "^10.29.8"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.2",
+    "@types/vscode": "1.94",
+    "@vscode/vsce": "^4.0.0",
+    "esbuild": "^0.28.2",
+    "typescript": "^7.0.2"
   }
 }

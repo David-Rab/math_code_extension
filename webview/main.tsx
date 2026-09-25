@@ -1,0 +1,748 @@
+import { render } from 'preact';
+import { memo } from 'preact/compat';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
+import type { HostToView, Item, Snapshot, Status, ThreadMeta, ViewConfig, ViewToHost, Question } from '../src/shared/protocol';
+import { renderMarkdown, setRenderMath } from './markdown';
+
+declare function acquireVsCodeApi(): { postMessage(m: unknown): void; getState(): any; setState(s: any): void };
+const vscode = acquireVsCodeApi();
+const send = (m: ViewToHost) => vscode.postMessage(m);
+
+// ---------------------------------------------------------------------------
+// Store: host messages are buffered and applied once per animation frame, so
+// a burst of streamed tokens costs one render, not hundreds.
+
+interface State extends Snapshot {
+  active: string;
+  unread: Record<string, boolean>;
+}
+
+let state: State = {
+  threads: [],
+  items: {},
+  drafts: {},
+  status: { models: [], commands: [], remote: { state: 'off' }, busy: false, starting: true },
+  config: { renderMath: true, toolActivity: 'summary', showThinking: false, enterToSend: true },
+  active: 'main',
+  unread: {},
+};
+let setVersion: (n: number) => void = () => {};
+let version = 0;
+let queue: HostToView[] = [];
+let scheduled = false;
+const fileListeners = new Set<(q: string, files: string[]) => void>();
+
+window.addEventListener('message', (e: MessageEvent<HostToView>) => {
+  if (e.data.t === 'fileMatches') {
+    for (const l of fileListeners) l(e.data.query, e.data.files);
+    return;
+  }
+  queue.push(e.data);
+  if (!scheduled) {
+    scheduled = true;
+    requestAnimationFrame(flush);
+  }
+});
+
+function flush() {
+  scheduled = false;
+  const batch = queue;
+  queue = [];
+  let s = state;
+  for (const m of batch) s = apply(s, m);
+  state = s;
+  setRenderMath(state.config.renderMath);
+  setVersion(++version);
+}
+
+function apply(s: State, m: HostToView): State {
+  switch (m.t) {
+    case 'snapshot': {
+      const saved = vscode.getState() ?? {};
+      const active = m.snapshot.threads.some((t) => t.id === saved.active) ? saved.active : 'main';
+      return { ...m.snapshot, active, unread: {} };
+    }
+    case 'thread': {
+      const i = s.threads.findIndex((t) => t.id === m.thread.id);
+      const threads = i >= 0 ? s.threads.map((t, j) => (j === i ? { ...m.thread } : t)) : [...s.threads, { ...m.thread }];
+      return { ...s, threads, items: s.items[m.thread.id] ? s.items : { ...s.items, [m.thread.id]: [] } };
+    }
+    case 'item': {
+      const list = s.items[m.threadId] ?? [];
+      let i = -1;
+      for (let j = list.length - 1; j >= 0; j--)
+        if (list[j].id === m.item.id) {
+          i = j;
+          break;
+        }
+      const next = i >= 0 ? list.map((x, j) => (j === i ? m.item : x)) : [...list, m.item];
+      const unread = m.threadId !== s.active && i < 0 ? { ...s.unread, [m.threadId]: true } : s.unread;
+      return { ...s, items: { ...s.items, [m.threadId]: next }, unread };
+    }
+    case 'draft': {
+      const drafts = { ...s.drafts };
+      if (m.text === null) delete drafts[m.threadId];
+      else drafts[m.threadId] = m.text;
+      return { ...s, drafts };
+    }
+    case 'status':
+      return { ...s, status: { ...s.status, ...m.status } };
+    case 'config':
+      return { ...s, config: m.config };
+    default:
+      return s;
+  }
+}
+
+function setActive(id: string) {
+  state = { ...state, active: id, unread: { ...state.unread, [id]: false } };
+  vscode.setState({ ...(vscode.getState() ?? {}), active: id });
+  setVersion(++version);
+}
+
+function setConfig(patch: Partial<ViewConfig>) {
+  state = { ...state, config: { ...state.config, ...patch } };
+  setRenderMath(state.config.renderMath);
+  setVersion(++version);
+  send({ t: 'setConfig', config: patch });
+}
+
+// ---------------------------------------------------------------------------
+
+function App() {
+  const [, force] = useState(0);
+  setVersion = force;
+  useEffect(() => send({ t: 'ready' }), []);
+  useEffect(() => {
+    // Remember the session so VS Code can restore this panel after a restart.
+    if (state.status.sessionId) vscode.setState({ ...(vscode.getState() ?? {}), sessionId: state.status.sessionId, cwd: state.status.cwd });
+  }, [state.status.sessionId]);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!e.altKey || (e.key !== '[' && e.key !== ']' && !/^[1-9]$/.test(e.key))) return;
+      const ids = state.threads.map((t) => t.id);
+      let i = ids.indexOf(state.active);
+      if (e.key === '[') i = Math.max(0, i - 1);
+      else if (e.key === ']') i = Math.min(ids.length - 1, i + 1);
+      else i = Math.min(ids.length - 1, Number(e.key) - 1);
+      setActive(ids[i]);
+      e.preventDefault();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  const s = state;
+  const thread = s.threads.find((t) => t.id === s.active) ?? s.threads[0];
+  if (!thread) return <div class="empty">Starting…</div>;
+  return (
+    <div class="app">
+      <Tabs threads={s.threads} active={thread.id} unread={s.unread} items={s.items} />
+      <ThreadView key={thread.id} thread={thread} items={s.items[thread.id] ?? []} draft={s.drafts[thread.id]} config={s.config} />
+      <Attention active={thread.id} />
+      <Composer status={s.status} thread={thread} config={s.config} />
+      <StatusBar status={s.status} config={s.config} />
+    </div>
+  );
+}
+
+// --- tabs ------------------------------------------------------------------
+
+function needsYou(items: Item[] | undefined) {
+  return !!items?.some((i) => (i.kind === 'permission' || i.kind === 'question' || i.kind === 'plan') && i.state === 'pending');
+}
+
+function Tabs({ threads, active, unread, items }: { threads: ThreadMeta[]; active: string; unread: Record<string, boolean>; items: Record<string, Item[]> }) {
+  if (threads.length < 2) return null;
+  return (
+    <div class="tabs" onWheel={(e) => ((e.currentTarget as HTMLElement).scrollLeft += (e as WheelEvent).deltaY)}>
+      {threads.map((t, i) => (
+        <button
+          key={t.id}
+          class={`tab ${t.id === active ? 'active' : ''} ${t.id === 'main' ? 'main' : ''}`}
+          title={[t.title, t.agentType, t.model, t.background ? 'background' : ''].filter(Boolean).join(' · ') + (i < 9 ? `  (Alt+${i + 1})` : '')}
+          onClick={() => setActive(t.id)}
+          style={t.id === 'main' ? undefined : { '--agent-hue': String(hue(t.id)) }}
+        >
+          <StatusDot status={t.status} />
+          <span class="tab-title">{t.title}</span>
+          {needsYou(items[t.id]) ? <span class="badge-attn" title="Waiting for you">!</span> : unread[t.id] ? <span class="badge-unread" /> : null}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function hue(id: string) {
+  let h = 0;
+  for (const c of id) h = (h * 31 + c.charCodeAt(0)) % 360;
+  return h;
+}
+
+function StatusDot({ status }: { status: ThreadMeta['status'] }) {
+  if (status === 'running') return <span class="dot running" title="Running" />;
+  if (status === 'error') return <span class="dot error" title="Failed" />;
+  if (status === 'stopped') return <span class="dot stopped" title="Stopped" />;
+  return <span class="dot done" title="Idle / finished" />;
+}
+
+function Attention({ active }: { active: string }) {
+  const waiting = state.threads.filter((t) => t.id !== active && needsYou(state.items[t.id]));
+  if (!waiting.length) return null;
+  return (
+    <div class="attention">
+      {waiting.map((t) => (
+        <button key={t.id} class="link" onClick={() => setActive(t.id)}>
+          ⚠ {t.id === 'main' ? 'Main agent' : `“${t.title}”`} is waiting for you — show
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// --- thread ----------------------------------------------------------------
+
+const PAGE = 150;
+const scrollMemory = new Map<string, number>();
+
+function ThreadView({ thread, items, draft, config }: { thread: ThreadMeta; items: Item[]; draft?: string; config: ViewConfig }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const stick = useRef(true);
+  const [limit, setLimit] = useState(PAGE);
+  const [showJump, setShowJump] = useState(false);
+  const visible = items.length > limit ? items.slice(items.length - limit) : items;
+
+  useLayoutEffect(() => {
+    const el = ref.current!;
+    const saved = scrollMemory.get(thread.id);
+    if (saved !== undefined) {
+      el.scrollTop = saved;
+      stick.current = el.scrollHeight - el.clientHeight - saved < 40;
+    } else el.scrollTop = el.scrollHeight;
+  }, []);
+  useLayoutEffect(() => {
+    const el = ref.current!;
+    if (stick.current) el.scrollTop = el.scrollHeight;
+  });
+  const onScroll = () => {
+    const el = ref.current!;
+    stick.current = el.scrollHeight - el.clientHeight - el.scrollTop < 40;
+    scrollMemory.set(thread.id, el.scrollTop);
+    if (showJump === stick.current) setShowJump(!stick.current);
+  };
+
+  return (
+    <div class="thread" ref={ref} onScroll={onScroll} onClick={onLinkClick}>
+      {thread.id !== 'main' && <SubagentHeader thread={thread} />}
+      {items.length > limit && (
+        <button class="show-earlier" onClick={() => setLimit(limit + PAGE)}>
+          Show earlier ({items.length - limit} more)
+        </button>
+      )}
+      {visible.map((it) => (
+        <ItemView key={it.id} item={it} config={config} />
+      ))}
+      {draft !== undefined && <Draft text={draft} math={config.renderMath} />}
+      {thread.status === 'running' && draft === undefined && <div class="working">{thread.id === 'main' ? 'Working…' : 'Subagent working…'}</div>}
+      {showJump && (
+        <button class="jump" onClick={() => ((stick.current = true), (ref.current!.scrollTop = ref.current!.scrollHeight), setShowJump(false))}>
+          ↓ Latest
+        </button>
+      )}
+    </div>
+  );
+}
+
+function onLinkClick(e: MouseEvent) {
+  const a = (e.target as HTMLElement).closest('a[data-href]');
+  if (!a) return;
+  e.preventDefault();
+  send({ t: 'openLink', href: a.getAttribute('data-href')! });
+}
+
+function SubagentHeader({ thread }: { thread: ThreadMeta }) {
+  return (
+    <div class="sub-header" style={{ '--agent-hue': String(hue(thread.id)) }}>
+      <div>
+        <strong>{thread.title}</strong>
+        <span class="muted">
+          {' '}
+          · {[thread.agentType, thread.model, thread.background ? 'background' : ''].filter(Boolean).join(' · ')} · {statusWord(thread.status)}
+        </span>
+      </div>
+      {thread.status === 'running' && thread.taskId && (
+        <button class="secondary small" onClick={() => send({ t: 'stopTask', taskId: thread.taskId! })}>
+          Stop this subagent
+        </button>
+      )}
+    </div>
+  );
+}
+
+function statusWord(s: ThreadMeta['status']) {
+  return { running: 'running', done: 'finished', error: 'failed', stopped: 'stopped' }[s];
+}
+
+const Draft = ({ text, math }: { text: string; math: boolean }) => (
+  <div class="msg assistant streaming">
+    <div class="md" dangerouslySetInnerHTML={{ __html: renderMarkdown(text, false) + '<span class="caret"></span>' }} data-math={math} />
+  </div>
+);
+
+const ItemView = memo(function ItemView({ item, config }: { item: Item; config: ViewConfig }) {
+  switch (item.kind) {
+    case 'user':
+      return (
+        <div class="msg user">
+          <Markdown text={item.text} math={config.renderMath} />
+        </div>
+      );
+    case 'text':
+      return (
+        <div class="msg assistant">
+          <Markdown text={item.text} math={config.renderMath} />
+          <CopyButton text={item.text} />
+        </div>
+      );
+    case 'thinking':
+      return config.showThinking ? (
+        <details class="thinking">
+          <summary>Thinking</summary>
+          <Markdown text={item.text} math={config.renderMath} />
+        </details>
+      ) : null;
+    case 'tools':
+      return <Tools item={item} mode={config.toolActivity} />;
+    case 'agent': {
+      const t = state.threads.find((x) => x.id === item.threadId);
+      return (
+        <button class="agent-link" style={{ '--agent-hue': String(hue(item.threadId)) }} onClick={() => setActive(item.threadId)}>
+          <StatusDot status={t?.status ?? 'running'} />
+          <span>
+            Subagent <strong>{item.title}</strong>
+            {item.agentType ? <span class="muted"> · {item.agentType}</span> : null}
+          </span>
+          <span class="muted">open tab →</span>
+        </button>
+      );
+    }
+    case 'prompt':
+      return (
+        <details class="prompt" open={item.text.length < 600}>
+          <summary>Task given by the main agent</summary>
+          <Markdown text={item.text} math={config.renderMath} />
+        </details>
+      );
+    case 'permission':
+      return <Permission item={item} />;
+    case 'question':
+      return <QuestionCard item={item} />;
+    case 'plan':
+      return <PlanCard item={item} math={config.renderMath} />;
+    case 'notice':
+      return <div class={`notice ${item.level}`}>{item.text}</div>;
+    case 'unknown':
+      return (
+        <details class="unknown">
+          <summary>Unsupported event from Claude Code: {item.label}</summary>
+          <pre>{item.raw}</pre>
+        </details>
+      );
+  }
+});
+
+const Markdown = ({ text, math }: { text: string; math: boolean }) => {
+  const html = useMemo(() => renderMarkdown(text), [text, math]);
+  return <div class="md" dangerouslySetInnerHTML={{ __html: html }} />;
+};
+
+function CopyButton({ text }: { text: string }) {
+  const [done, setDone] = useState(false);
+  return (
+    <button
+      class="copy"
+      title="Copy as Markdown (with LaTeX source)"
+      onClick={() => {
+        void navigator.clipboard.writeText(text);
+        setDone(true);
+        setTimeout(() => setDone(false), 1200);
+      }}
+    >
+      {done ? '✓' : '⧉'}
+    </button>
+  );
+}
+
+function Tools({ item, mode }: { item: Extract<Item, { kind: 'tools' }>; mode: ViewConfig['toolActivity'] }) {
+  const [open, setOpen] = useState(false);
+  if (mode === 'hidden') return null;
+  const running = item.tools.some((t) => t.status === 'running');
+  const failed = item.tools.filter((t) => t.status === 'error').length;
+  const counts = new Map<string, number>();
+  for (const t of item.tools) counts.set(t.name, (counts.get(t.name) ?? 0) + 1);
+  const summary = [...counts].map(([n, c]) => (c > 1 ? `${n} ×${c}` : n)).join(', ');
+  const expanded = mode === 'detailed' || open;
+  return (
+    <div class="tools">
+      <button class="tools-line" onClick={() => setOpen(!open)}>
+        <span class={running ? 'spin' : ''}>{running ? '◌' : '⚙'}</span> {item.tools.length} action{item.tools.length > 1 ? 's' : ''}: {summary}
+        {failed ? <span class="err"> · {failed} failed</span> : null}
+      </button>
+      {expanded && (
+        <ul>
+          {item.tools.map((t) => (
+            <li key={t.id} class={t.status}>
+              <span class="tool-name">{t.name}</span> {t.summary}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+// --- interactive cards -----------------------------------------------------
+
+function Permission({ item }: { item: Extract<Item, { kind: 'permission' }> }) {
+  const [msg, setMsg] = useState('');
+  const pending = item.state === 'pending';
+  return (
+    <div class={`card permission ${item.state}`}>
+      <div class="card-title">
+        {pending ? 'Allow' : { allowed: 'Allowed', denied: 'Denied', cancelled: 'Cancelled', pending: '' }[item.state]} <strong>{item.tool}</strong>
+        {pending ? '?' : ''}
+      </div>
+      <pre class="detail">{item.detail}</pre>
+      {pending && (
+        <>
+          <div class="buttons">
+            <button onClick={() => send({ t: 'permission', id: item.id, allow: true })}>Allow</button>
+            {item.suggestions.map((s, i) => (
+              <button key={i} class="secondary" onClick={() => send({ t: 'permission', id: item.id, allow: true, suggestion: i })}>
+                {s}
+              </button>
+            ))}
+            <button class="danger" onClick={() => send({ t: 'permission', id: item.id, allow: false, message: msg })}>
+              Deny
+            </button>
+          </div>
+          <input class="reason" placeholder="Optional: tell Claude what to do instead (sent with Deny)" value={msg} onInput={(e) => setMsg((e.target as HTMLInputElement).value)} />
+        </>
+      )}
+    </div>
+  );
+}
+
+function QuestionCard({ item }: { item: Extract<Item, { kind: 'question' }> }) {
+  const [picked, setPicked] = useState<Record<string, string[]>>({});
+  const [other, setOther] = useState<Record<string, string>>({});
+  const pending = item.state === 'pending';
+  const toggle = (q: Question, label: string) => {
+    const cur = picked[q.question] ?? [];
+    const next = q.multiSelect ? (cur.includes(label) ? cur.filter((x) => x !== label) : [...cur, label]) : [label];
+    setPicked({ ...picked, [q.question]: next });
+  };
+  const answers = () => {
+    const out: Record<string, string> = {};
+    for (const q of item.questions) {
+      const vals = [...(picked[q.question] ?? [])];
+      if (other[q.question]?.trim()) vals.push(other[q.question].trim());
+      out[q.question] = vals.join(', ');
+    }
+    return out;
+  };
+  const complete = item.questions.every((q) => (picked[q.question]?.length ?? 0) > 0 || other[q.question]?.trim());
+  return (
+    <div class={`card question ${item.state}`}>
+      {item.questions.map((q) => (
+        <div key={q.question} class="q">
+          <div class="q-header">{q.header}</div>
+          <div class="q-text">{q.question}</div>
+          {pending ? (
+            <>
+              {q.options.map((o) => {
+                const on = (picked[q.question] ?? []).includes(o.label);
+                return (
+                  <button key={o.label} class={`option ${on ? 'on' : ''}`} onClick={() => toggle(q, o.label)}>
+                    <span class="opt-label">{q.multiSelect ? (on ? '☑' : '☐') : on ? '◉' : '○'} {o.label}</span>
+                    <span class="opt-desc">{o.description}</span>
+                  </button>
+                );
+              })}
+              <input class="reason" placeholder="Other…" value={other[q.question] ?? ''} onInput={(e) => setOther({ ...other, [q.question]: (e.target as HTMLInputElement).value })} />
+            </>
+          ) : (
+            <div class="answer">→ {item.answers?.[q.question] ?? '(no answer)'}</div>
+          )}
+        </div>
+      ))}
+      {pending && (
+        <div class="buttons">
+          <button disabled={!complete} onClick={() => send({ t: 'answer', id: item.id, answers: answers() })}>
+            Submit
+          </button>
+          <button class="secondary" onClick={() => send({ t: 'answer', id: item.id, answers: null })}>
+            Skip
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PlanCard({ item, math }: { item: Extract<Item, { kind: 'plan' }>; math: boolean }) {
+  const [fb, setFb] = useState('');
+  const pending = item.state === 'pending';
+  return (
+    <div class={`card plan ${item.state}`}>
+      <div class="card-title">Plan {pending ? '— approve?' : `(${item.state})`}</div>
+      <Markdown text={item.plan} math={math} />
+      {pending && (
+        <>
+          <div class="buttons">
+            <button onClick={() => send({ t: 'plan', id: item.id, approve: true, mode: 'acceptEdits' })}>Approve, auto-accept edits</button>
+            <button class="secondary" onClick={() => send({ t: 'plan', id: item.id, approve: true, mode: 'default' })}>
+              Approve, ask before edits
+            </button>
+            <button class="danger" onClick={() => send({ t: 'plan', id: item.id, approve: false, feedback: fb })}>
+              Keep planning
+            </button>
+          </div>
+          <textarea class="reason" rows={2} placeholder="Feedback for Claude (sent with Keep planning)" value={fb} onInput={(e) => setFb((e.target as HTMLTextAreaElement).value)} />
+        </>
+      )}
+    </div>
+  );
+}
+
+// --- composer --------------------------------------------------------------
+
+function Composer({ status, thread, config }: { status: Status; thread: ThreadMeta; config: ViewConfig }) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+  const [text, setText] = useState<string>(() => vscode.getState()?.draft ?? '');
+  const [menu, setMenu] = useState<{ kind: '/' | '@'; items: string[]; sel: number; start: number } | null>(null);
+  const history = useRef<string[]>([]);
+  const histPos = useRef(-1);
+
+  useEffect(() => {
+    const onFiles = (_q: string, files: string[]) =>
+      setMenu((m) => (m?.kind === '@' ? { ...m, items: files, sel: 0 } : m));
+    fileListeners.add(onFiles);
+    return () => void fileListeners.delete(onFiles);
+  }, []);
+  useLayoutEffect(() => {
+    const el = ref.current!;
+    el.style.height = 'auto';
+    el.style.height = Math.min(el.scrollHeight, 300) + 'px';
+  }, [text]);
+
+  const update = (v: string) => {
+    setText(v);
+    vscode.setState({ ...(vscode.getState() ?? {}), draft: v });
+    const caret = ref.current?.selectionStart ?? v.length;
+    const before = v.slice(0, caret);
+    const slash = before.match(/^\/([\w:-]*)$/);
+    const at = before.match(/(?:^|\s)@([^\s@]*)$/);
+    if (slash) {
+      const q = slash[1].toLowerCase();
+      const items = status.commands.filter((c) => c.toLowerCase().includes(q)).slice(0, 12);
+      setMenu(items.length ? { kind: '/', items, sel: 0, start: 0 } : null);
+    } else if (at) {
+      setMenu({ kind: '@', items: menu?.kind === '@' ? menu.items : [], sel: 0, start: caret - at[1].length - 1 });
+      send({ t: 'findFiles', query: at[1] });
+    } else if (menu) setMenu(null);
+  };
+
+  const choose = (value: string) => {
+    if (!menu) return;
+    const el = ref.current!;
+    const caret = el.selectionStart;
+    const insert = menu.kind === '/' ? `/${value} ` : `@${value} `;
+    const v = text.slice(0, menu.start) + insert + text.slice(caret);
+    setMenu(null);
+    update(v);
+    requestAnimationFrame(() => el.setSelectionRange(menu.start + insert.length, menu.start + insert.length));
+    el.focus();
+  };
+
+  const submit = () => {
+    const v = text.trim();
+    if (!v) return;
+    send({ t: 'send', text: v });
+    history.current.push(v);
+    histPos.current = -1;
+    update('');
+    setActive('main');
+  };
+
+  const onKey = (e: KeyboardEvent) => {
+    if (menu && menu.items.length) {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        const d = e.key === 'ArrowDown' ? 1 : -1;
+        setMenu({ ...menu, sel: (menu.sel + d + menu.items.length) % menu.items.length });
+        e.preventDefault();
+        return;
+      }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        choose(menu.items[menu.sel]);
+        e.preventDefault();
+        return;
+      }
+      if (e.key === 'Escape') {
+        setMenu(null);
+        e.preventDefault();
+        return;
+      }
+    }
+    if (e.key === 'Escape' && status.busy) {
+      send({ t: 'interrupt' });
+      e.preventDefault();
+      return;
+    }
+    if (e.key === 'ArrowUp' && !text && history.current.length) {
+      histPos.current = histPos.current < 0 ? history.current.length - 1 : Math.max(0, histPos.current - 1);
+      update(history.current[histPos.current]);
+      e.preventDefault();
+      return;
+    }
+    const sendKey = config.enterToSend ? e.key === 'Enter' && !e.shiftKey && !e.isComposing : e.key === 'Enter' && (e.ctrlKey || e.metaKey);
+    if (sendKey) {
+      submit();
+      e.preventDefault();
+    }
+  };
+
+  const placeholder =
+    thread.id === 'main' ? (status.busy ? 'Claude is working — messages you send now are queued' : 'Message Claude  (/ commands, @ files)') : 'Messages go to the main agent';
+  return (
+    <div class="composer">
+      {menu && menu.items.length > 0 && (
+        <div class="menu">
+          {menu.items.map((it, i) => (
+            <div key={it} class={`menu-item ${i === menu.sel ? 'sel' : ''}`} onMouseDown={(e) => (e.preventDefault(), choose(it))}>
+              {menu.kind}
+              {it}
+            </div>
+          ))}
+        </div>
+      )}
+      <textarea ref={ref} rows={1} value={text} placeholder={placeholder} onInput={(e) => update((e.target as HTMLTextAreaElement).value)} onKeyDown={onKey} />
+      {status.busy ? (
+        <button class="danger" title="Stop (Esc)" onClick={() => send({ t: 'interrupt' })}>
+          ■ Stop
+        </button>
+      ) : null}
+      <button title={config.enterToSend ? 'Send (Enter)' : 'Send (Ctrl+Enter)'} disabled={!text.trim()} onClick={submit}>
+        Send
+      </button>
+    </div>
+  );
+}
+
+// --- status bar ------------------------------------------------------------
+
+const MODES: [string, string][] = [
+  ['default', 'Ask before edits'],
+  ['acceptEdits', 'Accept edits'],
+  ['plan', 'Plan mode'],
+  ['auto', 'Auto'],
+];
+
+function fmtTokens(n?: number) {
+  if (n === undefined) return '?';
+  return n >= 1000 ? `${Math.round(n / 1000)}k` : String(n);
+}
+
+function resetIn(t?: number) {
+  if (!t) return '';
+  const mins = Math.round((t * 1000 - Date.now()) / 60000);
+  if (mins < 0) return '';
+  return mins < 60 ? ` (resets in ${mins} min)` : mins < 48 * 60 ? ` (resets in ${Math.round(mins / 60)} h)` : ` (resets in ${Math.round(mins / 1440)} d)`;
+}
+
+function StatusBar({ status, config }: { status: Status; config: ViewConfig }) {
+  const model = status.models.find((m) => m.value === status.modelChoice);
+  const efforts = model?.effortLevels ?? status.models.find((m) => m.value === 'default')?.effortLevels ?? [];
+  const modes = MODES.some(([v]) => v === status.permissionMode) || !status.permissionMode ? MODES : [...MODES, [status.permissionMode, status.permissionMode] as [string, string]];
+  const ctxTitle = status.contextBreakdown?.map((c) => `${c.name}: ${fmtTokens(c.tokens)}`).join('\n');
+  const rl = status.rateLimits;
+  return (
+    <div class="statusbar">
+      {status.starting && <span class="muted spin-text">starting Claude Code…</span>}
+      <select title="Model" value={status.modelChoice ?? ''} onChange={(e) => send({ t: 'setModel', value: (e.target as HTMLSelectElement).value })}>
+        {!status.modelChoice && <option value="">{status.model ?? 'model'}</option>}
+        {status.models.map((m) => (
+          <option key={m.value} value={m.value} title={m.description}>
+            {m.displayName}
+          </option>
+        ))}
+      </select>
+      {efforts.length > 0 && (
+        <select title="Effort" value={status.effort ?? ''} onChange={(e) => send({ t: 'setEffort', value: (e.target as HTMLSelectElement).value })}>
+          {!status.effort && <option value="">effort</option>}
+          {efforts.map((e) => (
+            <option key={e} value={e}>
+              {e}
+            </option>
+          ))}
+        </select>
+      )}
+      <select title="Permission mode" value={status.permissionMode ?? ''} onChange={(e) => send({ t: 'setMode', value: (e.target as HTMLSelectElement).value })}>
+        {modes.map(([v, l]) => (
+          <option key={v} value={v}>
+            {l}
+          </option>
+        ))}
+      </select>
+      <span class="sep" />
+      <span class="stat" title={`Context: ${fmtTokens(status.contextTokens)} of ${fmtTokens(status.contextMax)} tokens\n${ctxTitle ?? ''}`} onClick={() => send({ t: 'refreshStatus' })}>
+        ctx {status.contextPercent ?? '–'}%
+      </span>
+      <span class="stat" title="Share of the last turn's input read from the prompt cache">
+        cache {status.cacheHitPercent ?? '–'}%
+      </span>
+      {rl && (
+        <span class="stat" title={`Plan usage — 5-hour window: ${rl.fiveHour?.utilization ?? '?'}%${resetIn(rl.fiveHour?.resetsAt)}\n7-day window: ${rl.sevenDay?.utilization ?? '?'}%${resetIn(rl.sevenDay?.resetsAt)}`}>
+          5h {rl.fiveHour?.utilization ?? '–'}% · 7d {rl.sevenDay?.utilization ?? '–'}%
+        </span>
+      )}
+      <span class="sep" />
+      <button
+        class={`toggle remote ${status.remote.state}`}
+        title={status.remote.state === 'on' ? `Remote control on — ${status.remote.url ?? ''}\nClick to turn off` : 'Remote control off — click to turn on'}
+        onClick={() => send({ t: 'setRemote', on: status.remote.state !== 'on' })}
+      >
+        ⇄ RC
+      </button>
+      {status.remote.state === 'on' && status.remote.url && (
+        <a class="stat" data-href={status.remote.url} href="#" onClick={onLinkClick} title="Open this session on claude.ai">
+          open
+        </a>
+      )}
+      <button class={`toggle ${config.renderMath ? 'on' : ''}`} title="Render LaTeX math" onClick={() => setConfig({ renderMath: !config.renderMath })}>
+        ∑
+      </button>
+      <select
+        title="Tool activity"
+        value={config.toolActivity}
+        onChange={(e) => setConfig({ toolActivity: (e.target as HTMLSelectElement).value as ViewConfig['toolActivity'] })}
+      >
+        <option value="hidden">tools: hidden</option>
+        <option value="summary">tools: summary</option>
+        <option value="detailed">tools: detailed</option>
+      </select>
+      <span class="grow" />
+      {status.update ? (
+        <button class="update" title={`Claude Code ${status.update.latest} is available (you have ${status.update.current})`} onClick={() => send({ t: 'runUpdate' })}>
+          ↑ {status.update.latest}
+        </button>
+      ) : (
+        <span class="muted" title="Claude Code version">
+          {status.version ? `v${status.version}` : ''}
+        </span>
+      )}
+    </div>
+  );
+}
+
+render(<App />, document.getElementById('root')!);
