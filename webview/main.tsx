@@ -32,6 +32,9 @@ let queue: HostToView[] = [];
 let scheduled = false;
 const fileListeners = new Set<(q: string, files: string[]) => void>();
 
+window.addEventListener('error', (e) => send({ t: 'log', text: `error: ${e.message} at ${e.filename}:${e.lineno}` }));
+window.addEventListener('unhandledrejection', (e) => send({ t: 'log', text: `unhandled rejection: ${String(e.reason)}` }));
+
 window.addEventListener('message', (e: MessageEvent<HostToView>) => {
   if (e.data.t === 'fileMatches') {
     for (const l of fileListeners) l(e.data.query, e.data.files);

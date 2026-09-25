@@ -116,4 +116,5 @@ export type ViewToHost =
   | { t: 'openLink'; href: string }
   | { t: 'findFiles'; query: string }
   | { t: 'refreshStatus' }
-  | { t: 'runUpdate' };
+  | { t: 'runUpdate' }
+  | { t: 'log'; text: string };

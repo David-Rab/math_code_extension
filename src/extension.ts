@@ -16,6 +16,7 @@ let latest: Latest | undefined;
 
 export function activate(ctx: vscode.ExtensionContext) {
   extUri = ctx.extensionUri;
+  log(`activated from ${ctx.extensionPath} (VS Code ${vscode.version})`);
   setBundledExecutable(path.join(ctx.extensionPath, 'dist', 'bin', 'claude.exe'));
   const history = new SessionsView();
 
@@ -71,7 +72,7 @@ function openPanel(resumeId?: string, cwd = defaultCwd()) {
     const open = [...sessions].find((s) => s.sessionId === resumeId);
     if (open) return open.panel.reveal();
   }
-  const panel = vscode.window.createWebviewPanel(VIEW_TYPE, 'Claude', { viewColumn: vscode.ViewColumn.Beside, preserveFocus: false }, {});
+  const panel = vscode.window.createWebviewPanel(VIEW_TYPE, 'Claude', { viewColumn: vscode.ViewColumn.Beside, preserveFocus: false }, { enableFindWidget: true, retainContextWhenHidden: true });
   attach(panel, cwd, resumeId);
 }
 
@@ -80,6 +81,7 @@ function attach(panel: vscode.WebviewPanel, cwd: string, resumeId?: string) {
   panel.webview.options = { enableScripts: true, localResourceRoots: [root] };
   panel.iconPath = vscode.Uri.joinPath(extUri, 'resources', 'icon.svg');
   panel.webview.html = html(panel.webview, root);
+  log(`panel opened: cwd=${cwd} resume=${resumeId ?? '-'}`);
   const s = new ChatSession(panel, cwd, warm, resumeId);
   sessions.add(s);
   panel.onDidDispose(() => sessions.delete(s));
