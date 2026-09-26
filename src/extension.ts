@@ -26,7 +26,8 @@ const host: SessionHost = {
 export function activate(ctx: vscode.ExtensionContext) {
   extUri = ctx.extensionUri;
   log(`activated from ${ctx.extensionPath} (VS Code ${vscode.version})`);
-  setBundledExecutable(path.join(ctx.extensionPath, 'dist', 'bin', 'claude.exe'));
+  const info = readBuildInfo(ctx.extensionPath);
+  setBundledExecutable(path.join(ctx.extensionPath, 'dist', info?.exe ?? 'bin/claude.exe'));
   history = new SessionsView();
   initTrust(ctx.globalState);
 
@@ -299,6 +300,6 @@ async function checkForUpdates(ctx: vscode.ExtensionContext, manual: boolean): P
     'Update now',
   );
   if (choice === 'What changed?') await showChangelog(info.claudeCodeVersion, l.claudeCodeVersion);
-  else if (choice === 'Update now') runUpdate(info, l);
+  else if (choice === 'Update now') runUpdate(info, l, ctx.extensionMode === vscode.ExtensionMode.Development);
   return true;
 }

@@ -290,7 +290,7 @@
     "watch": "node build.mjs --watch",
     "typecheck": "tsc --noEmit",
     "replay": "esbuild test/replay.ts --bundle --platform=node --format=esm --outfile=.test/replay.mjs --log-level=warning && node .test/replay.mjs",
-    "package": "node build.mjs --production && node test/smoke.cjs && vsce package --no-dependencies --skip-license --allow-missing-repository -o claude-panel.vsix",
+    "package": "node scripts/sync-version.mjs && node build.mjs --production && node test/smoke.cjs && vsce package --no-dependencies --skip-license --allow-missing-repository -o claude-panel.vsix",
     "test-md": "esbuild test/markdown.ts --bundle --platform=node --format=esm --outfile=.test/markdown.mjs --log-level=warning && node .test/markdown.mjs",
     "e2e": "esbuild test/e2e.ts --bundle --platform=node --format=esm --outfile=.test/e2e.mjs --log-level=warning --alias:vscode=./test/mock-vscode.ts --external:@anthropic-ai/claude-agent-sdk && node .test/e2e.mjs",
     "harness": "esbuild test/harness.ts --bundle --platform=node --format=esm --outfile=.test/harness.mjs --log-level=warning --external:@anthropic-ai/claude-agent-sdk && node .test/harness.mjs",
@@ -298,7 +298,7 @@
     "trust-e2e": "esbuild test/trust-e2e.ts --bundle --platform=node --format=esm --outfile=.test/trust-e2e.mjs --log-level=warning --alias:vscode=./test/mock-vscode.ts --external:@anthropic-ai/claude-agent-sdk && node .test/trust-e2e.mjs"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "0.3.282",
+    "@anthropic-ai/claude-agent-sdk": "0.3.283",
     "katex": "^0.18.9",
     "markdown-it": "^15.0.2",
     "preact": "^10.29.8"

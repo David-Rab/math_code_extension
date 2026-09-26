@@ -8,6 +8,7 @@ import { log } from './config';
 export interface BuildInfo {
   sdkVersion: string;
   claudeCodeVersion: string;
+  exe?: string; // bundled binary, relative to dist/
   sourceDir: string;
 }
 
@@ -77,8 +78,11 @@ export async function showChangelog(current: string, latest: string) {
   await vscode.commands.executeCommand('markdown.showPreview', doc.uri);
 }
 
-/** Rebuild this extension against the latest SDK in a terminal, then reinstall it. */
-export function runUpdate(info: BuildInfo, latest: Latest) {
+/**
+ * Rebuild this extension against the latest SDK in a terminal. An installed copy
+ * is then reinstalled; a development copy (the preview window) is only rebuilt.
+ */
+export function runUpdate(info: BuildInfo, latest: Latest, development: boolean) {
   if (!fs.existsSync(path.join(info.sourceDir, 'package.json'))) {
     void vscode.window.showErrorMessage(`Claude Panel source folder not found: ${info.sourceDir}`);
     return;
@@ -86,6 +90,8 @@ export function runUpdate(info: BuildInfo, latest: Latest) {
   const term = vscode.window.createTerminal({ name: 'Claude Panel update', cwd: info.sourceDir, shellPath: 'cmd.exe' });
   term.show();
   term.sendText(
-    `npm install @anthropic-ai/claude-agent-sdk@${latest.sdkVersion} --save-exact && npm run typecheck && npm test && npm run package && code --install-extension claude-panel.vsix --force && echo "Done: reload the window to use Claude Code ${latest.claudeCodeVersion}."`,
+    `npm install @anthropic-ai/claude-agent-sdk@${latest.sdkVersion} --save-exact && npm run typecheck && npm test && ` +
+      (development ? 'npm run build' : 'npm run package && code --install-extension claude-panel.vsix --force') +
+      ` && echo "Done: reload the window to use Claude Code ${latest.claudeCodeVersion}."`,
   );
 }

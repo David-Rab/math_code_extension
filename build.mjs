@@ -19,10 +19,21 @@ const sdkPkg = JSON.parse(fs.readFileSync('node_modules/@anthropic-ai/claude-age
 const exe = 'node_modules/@anthropic-ai/claude-agent-sdk-win32-x64/claude.exe';
 fs.mkdirSync('dist/bin', { recursive: true });
 const same = (a, b) => fs.existsSync(b) && fs.statSync(a).size === fs.statSync(b).size && fs.statSync(a).mtimeMs <= fs.statSync(b).mtimeMs;
-if (!same(exe, 'dist/bin/claude.exe')) fs.copyFileSync(exe, 'dist/bin/claude.exe'); // 240 MB: copy only when it changed
+// One file per Claude Code version: an update adds the new binary next to the
+// one running sessions still use (Windows cannot overwrite a running exe).
+const exeName = `claude-${sdkPkg.claudeCodeVersion}.exe`;
+if (!same(exe, `dist/bin/${exeName}`)) fs.copyFileSync(exe, `dist/bin/${exeName}`); // 240 MB: copy only when it changed
+for (const f of fs.readdirSync('dist/bin')) {
+  if (f === exeName || !/^claude.*\.exe$/.test(f)) continue;
+  try {
+    fs.rmSync(`dist/bin/${f}`); // older versions, once nothing runs them
+  } catch {
+    /* still in use; removed by a later build */
+  }
+}
 fs.writeFileSync(
   'dist/build-info.json',
-  JSON.stringify({ sdkVersion: sdkPkg.version, claudeCodeVersion: sdkPkg.claudeCodeVersion, sourceDir: process.cwd(), builtAt: new Date().toISOString() }, null, 2),
+  JSON.stringify({ sdkVersion: sdkPkg.version, claudeCodeVersion: sdkPkg.claudeCodeVersion, exe: `bin/${exeName}`, sourceDir: process.cwd(), builtAt: new Date().toISOString() }, null, 2),
 );
 
 const common = { bundle: true, minify: prod, sourcemap: !prod, logLevel: 'info' };
