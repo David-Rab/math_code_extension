@@ -22,6 +22,8 @@ Reads only your text messages, never tool calls, diffs or command output: put ev
 
 When the panel reports a new Claude Code release: read that version's section of the Claude Code CHANGELOG, `npm install @anthropic-ai/claude-agent-sdk@<version> --save-exact`, diff the message types in `sdk.d.ts` against the previous version and classify any new ones in `src/transcript.ts`, then typecheck, test, build, smoke, live e2e, commit. `npm run package` builds `claude-panel.vsix` (extension version follows the Claude Code patch number).
 
+The panel's **Update now** button runs the mechanical part of this (SDK install, typecheck, tests, package, reinstall) but not the changelog review or the check for new message types, and it does not commit. If `git status` shows a changed SDK version in package.json, the user used it: do the review steps for that version, then commit.
+
 ## Safety rules
 
 - Never offer or set `bypassPermissions`; the host refuses modes outside default/acceptEdits/plan/auto/dontAsk.
