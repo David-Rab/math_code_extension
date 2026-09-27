@@ -625,7 +625,8 @@ function TrustCard({ item }: { item: Extract<Item, { kind: 'trust' }> }) {
       </div>
       <div class="muted">
         Trusting lets Claude Code use this folder's own settings: permission rules and hooks in <code>.claude/</code>, and MCP servers in <code>.mcp.json</code>.
-        Hooks and MCP servers run programs, so only trust folders whose contents you know. Without trust, Claude Code still works here but ignores those
+        Hooks and MCP servers run programs, and a folder's settings can also redirect where Claude Code sends your requests (and your sign-in), so
+        only trust folders whose contents you know. Without trust, Claude Code still works here but ignores those
         settings. Claude Code remembers the answer.
       </div>
       <div class="buttons">

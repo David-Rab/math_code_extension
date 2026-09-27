@@ -34,7 +34,7 @@ function tex(src: string, display: boolean): string {
   let out = texCache.get(key);
   if (out === undefined) {
     try {
-      out = katex.renderToString(src, { displayMode: display, throwOnError: false, strict: 'ignore', output: 'html', trust: false, macros: { ...macros } });
+      out = katex.renderToString(src, { displayMode: display, throwOnError: false, strict: 'ignore', output: 'html', trust: false, maxSize: 50, maxExpand: 1000, macros: { ...macros } });
     } catch (e) {
       out = `<code class="tex-error" title="${escapeHtml(String((e as Error).message))}">${escapeHtml(src)}</code>`;
     }

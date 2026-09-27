@@ -3,6 +3,8 @@
 export const settings: Record<string, unknown> = {};
 
 export const workspace = {
+  isTrusted: true,
+  onDidGrantWorkspaceTrust: () => ({ dispose() {} }),
   getConfiguration: () => ({
     get: <T>(key: string, def: T): T => (key in settings ? (settings[key] as T) : def),
     update: async (key: string, value: unknown) => void (settings[key] = value),

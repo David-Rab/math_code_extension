@@ -481,31 +481,40 @@ export function summarizeTool(name: string, input: any): string {
   }
 }
 
-/** One-paragraph description of a tool call for a permission prompt. */
+/** Shorten long text for a permission card, always saying how much is not shown. */
+function cut(s: unknown, max = 1500): string {
+  const t = String(s ?? '');
+  return t.length > max ? `${t.slice(0, max)}\n… (${t.length - max} more characters not shown)` : t;
+}
+
+/** What a permission card shows: the full request, or clearly marked excerpts of it. */
 export function describeForPermission(name: string, input: any): string {
   input = input ?? {};
   switch (name) {
     case 'Bash':
-    case 'PowerShell':
-      return (input.description ? input.description + '\n' : '') + '$ ' + String(input.command ?? '');
+    case 'PowerShell': {
+      // Anything besides the command itself (background, timeout, sandbox flags) is listed too.
+      const extra = Object.entries(input).filter(([k]) => k !== 'command' && k !== 'description');
+      return (
+        (input.description ? input.description + '\n' : '') +
+        '$ ' +
+        cut(input.command, 4000) +
+        (extra.length ? '\n\n' + extra.map(([k, v]) => `${k}: ${JSON.stringify(v)}`).join('\n') : '')
+      );
+    }
     case 'Write': {
       const content = String(input.content ?? '');
       const lines = content.split('\n');
-      const preview = lines.slice(0, 40).join('\n') + (lines.length > 40 ? `\n… (${lines.length - 40} more lines)` : '');
-      return `Create/overwrite ${input.file_path}\n\n${preview}`;
+      const preview = lines.slice(0, 40).join('\n') + (lines.length > 40 ? `\n… (${lines.length - 40} more lines not shown)` : '');
+      return `Create/overwrite ${input.file_path}\n\n${cut(preview, 6000)}`;
     }
-    case 'Edit': {
-      const cut = (s: unknown) => {
-        const t = String(s ?? '');
-        return t.length > 1500 ? t.slice(0, 1500) + '…' : t;
-      };
+    case 'Edit':
       return `Edit ${input.file_path}${input.replace_all ? ' (every occurrence)' : ''}\n\n— replace:\n${cut(input.old_string)}\n\n— with:\n${cut(input.new_string)}`;
-    }
     case 'NotebookEdit':
-      return `Edit notebook ${input.notebook_path}`;
+      return `Edit notebook ${input.notebook_path}${input.cell_id ? ` (cell ${input.cell_id})` : ''}${input.edit_mode ? `, ${input.edit_mode}` : ''}\n\n${cut(input.new_source)}`;
     case 'WebFetch':
-      return `Fetch ${input.url}`;
+      return `Fetch ${input.url}${input.prompt ? `\n\n${cut(input.prompt, 500)}` : ''}`;
     default:
-      return JSON.stringify(input, null, 2).slice(0, 1500);
+      return cut(JSON.stringify(input, null, 2), 3000);
   }
 }

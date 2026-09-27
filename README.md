@@ -53,6 +53,8 @@ and adds a clean conversation view, a tab per subagent, and rendered math.
   every 6 h), shows the changelog, and can rebuild. Unknown events from Claude
   Code appear as "Unsupported event" cards instead of being dropped.
 
+**Update now** runs this repository's own build scripts and `npm install` for the new SDK version, so only use it on a source folder you trust.
+
 The **Auto** permission mode lets Claude Code's classifier approve many actions
 without asking; it prompts much less than "Ask before edits".
 
@@ -67,6 +69,7 @@ without asking; it prompts much less than "Ask before edits".
 - Settings that choose the executable, permission mode or remote control are
   user-level only; a folder's `.vscode/settings.json` cannot set them. The panel
   never uses `bypassPermissions`.
+- VS Code Restricted Mode is honoured: in an untrusted workspace nothing is pre-started and the folder's own Claude settings are never loaded.
 - Folder trust and sign-in go through Claude Code itself; the panel never
   writes `~/.claude.json` or touches credentials. Trust covers the whole git
   repository containing the folder.
@@ -81,8 +84,8 @@ npm install
 npm run typecheck
 npm test                     # transcript replay, unit, Markdown/LaTeX
 node test/smoke.cjs          # production bundle loads (after a build)
-npm run e2e -- <dir>         # live session against claude.exe (Haiku)
-npm run trust-e2e -- <dir>   # live folder-trust flow (fresh dir)
+npm run e2e -- <scratch dir> # live session (Haiku); auto-approves everything, use an empty scratch dir
+npm run trust-e2e -- <new scratch dir>  # live folder-trust flow
 npm run package              # mathpanel.vsix, for your own machine only
 code --install-extension mathpanel.vsix --force
 ```

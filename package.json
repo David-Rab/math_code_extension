@@ -253,7 +253,8 @@
           "additionalProperties": {
             "type": "string"
           },
-          "markdownDescription": "Extra KaTeX macros, e.g. `{\"\\Gal\": \"\\operatorname{Gal}\"}`. Built in: `F`, `Q`, `C`, `E` as blackboard bold."
+          "markdownDescription": "Extra KaTeX macros, e.g. `{\"\\Gal\": \"\\operatorname{Gal}\"}`. Built in: `F`, `Q`, `C`, `E` as blackboard bold.",
+          "scope": "application"
         },
         "claudePanel.sound": {
           "type": "string",
@@ -268,7 +269,8 @@
             "Never"
           ],
           "default": "needsYou",
-          "description": "Play a sound (only when you are not looking at the panel). Your own Stop hook already plays a sound when Claude finishes."
+          "description": "Play a sound (only when you are not looking at the panel). Your own Stop hook already plays a sound when Claude finishes.",
+          "scope": "application"
         },
         "claudePanel.notification": {
           "type": "string",
@@ -283,7 +285,8 @@
             "Never"
           ],
           "default": "needsYouAndDone",
-          "description": "Show a VS Code notification (only when you are not looking at the panel)."
+          "description": "Show a VS Code notification (only when you are not looking at the panel).",
+          "scope": "application"
         },
         "claudePanel.soundNeedsYou": {
           "type": "string",

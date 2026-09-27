@@ -57,7 +57,11 @@ export function activate(ctx: vscode.ExtensionContext) {
     // the saved state carries the session id.
     vscode.window.registerWebviewPanelSerializer(VIEW_TYPE, {
       async deserializeWebviewPanel(panel, state: any) {
-        attach(panel, state?.cwd ? normalizeCwd(state.cwd) : defaultCwd(), state?.sessionId);
+        // The saved state comes from the webview: accept only a known folder and a session-id-shaped value.
+        const known = [os.homedir(), ...(vscode.workspace.workspaceFolders ?? []).map((f) => f.uri.fsPath)].map((p) => normalizeCwd(p).toLowerCase());
+        const cwd = typeof state?.cwd === 'string' && known.includes(normalizeCwd(state.cwd).toLowerCase()) ? normalizeCwd(state.cwd) : defaultCwd();
+        const id = typeof state?.sessionId === 'string' && /^[0-9a-f-]{36}$/i.test(state.sessionId) ? state.sessionId : undefined;
+        attach(panel, cwd, id);
       },
     }),
     vscode.workspace.onDidChangeConfiguration((e) => {
@@ -75,8 +79,9 @@ export function activate(ctx: vscode.ExtensionContext) {
   status.show();
   ctx.subscriptions.push(status);
 
-  // Start a spare claude.exe now so the first session opens quickly.
-  warm.fill(defaultCwd());
+  // Start a spare claude.exe now so the first session opens quickly (not in VS Code Restricted Mode).
+  if (vscode.workspace.isTrusted) warm.fill(defaultCwd());
+  ctx.subscriptions.push(vscode.workspace.onDidGrantWorkspaceTrust(() => warm.fill(defaultCwd())));
   void checkAuth().then((a) => log(`signed in: ${a?.loggedIn ?? 'unknown'}`));
   if (readConfig().checkForUpdates) scheduleUpdateChecks(ctx, 15000);
 }

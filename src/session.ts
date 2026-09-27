@@ -53,7 +53,8 @@ export function buildOptions(cwd: string, hooks: () => SessionHooks | undefined,
     forwardSubagentText: true,
     perTaskStopAffordance: true,
     enableFileCheckpointing: true, // needed for "rewind code"
-    settingSources: ['user', 'project', 'local'],
+    // In VS Code Restricted Mode the folder's own Claude settings (hooks, MCP servers, rules) are never loaded.
+    settingSources: vscode.workspace.isTrusted ? ['user', 'project', 'local'] : ['user'],
     systemPrompt: { type: 'preset', preset: 'claude_code', append: VSCODE_CONTEXT },
     canUseTool: (name, input, ctx) => {
       const h = hooks();
@@ -82,8 +83,13 @@ function permissionLabel(u: PermissionUpdate): string {
     ({ session: 'for this session', localSettings: 'in this project (local)', projectSettings: 'in this project (shared)', userSettings: 'everywhere' } as Record<string, string>)[d] ?? d;
   switch (u.type) {
     case 'addRules':
-    case 'replaceRules':
-      return `Always allow ${u.rules.map((r) => r.toolName + (r.ruleContent ? `(${r.ruleContent})` : '')).join(', ')} ${where(u.destination)}`;
+    case 'replaceRules': {
+      const verb = u.behavior === 'deny' ? 'Always deny' : u.behavior === 'ask' ? 'Always ask for' : 'Always allow';
+      const rules = u.rules.map((r) => r.toolName + (r.ruleContent ? `(${r.ruleContent})` : '')).join(', ');
+      return u.type === 'replaceRules'
+        ? `Replace all "${u.behavior}" rules ${where(u.destination)} with: ${rules}`
+        : `${verb} ${rules} ${where(u.destination)}`;
+    }
     case 'setMode':
       return `Switch to ${u.mode} mode ${where(u.destination)}`;
     case 'addDirectories':
@@ -193,6 +199,7 @@ export class ChatSession {
   });
 
   private trustWarned = false;
+  private restrictedNoticeShown = false;
   private onStderr(d: string) {
     log(`[${this.sessionId ?? 'new'}] ${d.trimEnd()}`);
     // Claude Code prints this when the folder was never trusted; project
@@ -310,6 +317,18 @@ export class ChatSession {
   /** Show the trust card if this folder is untrusted and you have not said "don't ask". Returns true if shown. */
   private async askTrustIfNeeded(fromWarning = false): Promise<boolean> {
     if (this.trustItem) return false;
+    if (!vscode.workspace.isTrusted) {
+      // You chose not to trust this workspace in VS Code: no Claude trust card, no attestation.
+      if (!this.restrictedNoticeShown) {
+        this.restrictedNoticeShown = true;
+        this.transcript.notice(
+          'main',
+          'info',
+          "This VS Code window is in Restricted Mode, so this folder's own Claude settings (.claude/, .mcp.json) are not used. To use them, trust the workspace in VS Code first.",
+        );
+      }
+      return false;
+    }
     const root = (this.trustRootDir ??= await trustRoot(this.cwd));
     const trusted = isTrusted(root);
     if (trusted !== false && !fromWarning) return false;
@@ -519,10 +538,11 @@ export class ChatSession {
     });
   };
 
-  private settle(id: string): Pending | undefined {
+  private settle<K extends Pending['kind']>(id: string, kind: K): Extract<Pending, { kind: K }> | undefined {
     const p = this.pending.get(id);
+    if (p?.kind !== kind) return undefined;
     this.pending.delete(id);
-    return p;
+    return p as Extract<Pending, { kind: K }>;
   }
 
   // ---- messages from the webview -----------------------------------------
@@ -563,8 +583,8 @@ export class ChatSession {
         await this.q?.stopTask(m.taskId);
         return;
       case 'permission': {
-        const p = this.settle(m.id);
-        if (p?.kind !== 'permission') return;
+        const p = this.settle(m.id, 'permission');
+        if (!p) return;
         const item = this.transcript.findItem(p.threadId, m.id);
         if (m.allow) {
           const valid = Number.isInteger(m.suggestion) && m.suggestion! >= 0 && m.suggestion! < p.suggestions.length;
@@ -580,8 +600,8 @@ export class ChatSession {
         return;
       }
       case 'answer': {
-        const p = this.settle(m.id);
-        if (p?.kind !== 'question') return;
+        const p = this.settle(m.id, 'question');
+        if (!p) return;
         const item = this.transcript.findItem(p.threadId, m.id);
         if (m.answers) p.resolve({ behavior: 'allow', updatedInput: { ...p.input, answers: m.answers } });
         else p.resolve({ behavior: 'deny', message: 'The user declined to answer.' });
@@ -589,8 +609,8 @@ export class ChatSession {
         return;
       }
       case 'plan': {
-        const p = this.settle(m.id);
-        if (p?.kind !== 'plan') return;
+        const p = this.settle(m.id, 'plan');
+        if (!p) return;
         const item = this.transcript.findItem(p.threadId, m.id);
         if (m.approve) {
           p.resolve({ behavior: 'allow', updatedInput: p.input });
@@ -780,8 +800,26 @@ export class ChatSession {
 
 async function updateViewConfig(patch: Partial<ViewConfig>) {
   const c = vscode.workspace.getConfiguration('claudePanel');
-  const keys: Record<keyof ViewConfig, string> = { renderMath: 'renderMath', toolActivity: 'toolActivity', showThinking: 'showThinking', enterToSend: 'enterToSend', mathMacros: 'mathMacros' };
-  for (const [k, v] of Object.entries(patch)) await c.update(keys[k as keyof ViewConfig], v, vscode.ConfigurationTarget.Global);
+  const valid: Record<string, (v: unknown) => boolean> = {
+    renderMath: (v) => typeof v === 'boolean',
+    showThinking: (v) => typeof v === 'boolean',
+    enterToSend: (v) => typeof v === 'boolean',
+    toolActivity: (v) => v === 'hidden' || v === 'summary' || v === 'detailed',
+  };
+  for (const [k, v] of Object.entries(patch)) if (valid[k]?.(v)) await c.update(k, v, vscode.ConfigurationTarget.Global);
+}
+
+/** The real location of a path, following symlinks/junctions of its nearest existing ancestor. */
+function realPath(p: string): string {
+  let rest = '';
+  for (let cur = p; ; cur = path.dirname(cur)) {
+    try {
+      return path.join(fs.realpathSync.native(cur), rest);
+    } catch {
+      if (path.dirname(cur) === cur) return p;
+      rest = path.join(path.basename(cur), rest);
+    }
+  }
 }
 
 function isInside(file: string, root: string) {
@@ -815,8 +853,13 @@ async function openLink(href: string, cwd: string) {
     void vscode.window.showWarningMessage(`Not opened: ${file.slice(0, 120)} is not a web link or a local file.`);
     return;
   }
-  file = path.resolve(cwd, file);
-  const roots = [cwd, ...(vscode.workspace.workspaceFolders ?? []).map((f) => f.uri.fsPath)];
+  file = realPath(path.resolve(cwd, file));
+  if (/^[\\/]{2}/.test(file)) {
+    log(`refused link to a network location ${JSON.stringify(file).slice(0, 200)}`);
+    void vscode.window.showWarningMessage('Not opened: that link leads to a network location.');
+    return;
+  }
+  const roots = [cwd, ...(vscode.workspace.workspaceFolders ?? []).map((f) => f.uri.fsPath)].map(realPath);
   if (!roots.some((r) => isInside(file, r))) {
     const ok = await vscode.window.showWarningMessage('Open a file outside this project?', { modal: true, detail: file }, 'Open');
     if (ok !== 'Open') return;

@@ -4,7 +4,7 @@
 import * as vscode from 'vscode';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { log, logFile } from './config';
+import { log, logFile, redact } from './config';
 import { readBuildInfo } from './updates';
 import type { ChatSession } from './session';
 
@@ -53,7 +53,7 @@ export async function reportProblem(extPath: string, session: ChatSession | unde
 
   try {
     const tail = fs.readFileSync(logFile, 'utf8').split('\n').slice(-150).join('\n');
-    lines.push('## Panel log (last 150 lines)', '', '```', tail.trimEnd(), '```', '');
+    lines.push('## Panel log (last 150 lines)', '', '~~~~', tail.trimEnd().replace(/~~~~/g, '~ ~ ~ ~'), '~~~~', '');
   } catch {
     lines.push('_(panel log not readable)_', '');
   }
@@ -63,7 +63,7 @@ export async function reportProblem(extPath: string, session: ChatSession | unde
   fs.mkdirSync(dir, { recursive: true });
   const slug = description.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'problem';
   const file = path.join(dir, `${now.toISOString().slice(0, 16).replace(/[:T]/g, '-')}-${slug}.md`);
-  fs.writeFileSync(file, lines.join('\n'));
+  fs.writeFileSync(file, redact(lines.join('\n')));
   log(`problem report saved: ${file}`);
   const choice = await vscode.window.showInformationMessage(
     'Problem report saved. Ask Claude in the code_extension project to look at the bug reports.',

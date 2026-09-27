@@ -18,6 +18,8 @@ const vscode = new Proxy(
     },
     workspace: {
       onDidChangeConfiguration: noop,
+      onDidGrantWorkspaceTrust: noop,
+      isTrusted: true,
       getConfiguration: () => ({ get: (k, d) => (k === 'prewarm' || k === 'checkForUpdates' ? false : d) }),
       workspaceFolders: undefined,
       getWorkspaceFolder: () => undefined,

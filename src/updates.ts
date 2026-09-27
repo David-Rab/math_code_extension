@@ -87,7 +87,13 @@ export function runUpdate(info: BuildInfo, latest: Latest, development: boolean)
     void vscode.window.showErrorMessage(`MathPanel source folder not found: ${info.sourceDir}`);
     return;
   }
-  const term = vscode.window.createTerminal({ name: 'MathPanel update', cwd: info.sourceDir, shellPath: path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'cmd.exe') });
+  const term = vscode.window.createTerminal({
+    name: 'MathPanel update',
+    cwd: info.sourceDir,
+    shellPath: path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'cmd.exe'),
+    // cmd.exe otherwise looks in the current folder before PATH, so a planted npm.cmd or code.cmd would run.
+    env: { NoDefaultCurrentDirectoryInExePath: '1' },
+  });
   term.show();
   term.sendText(
     `npm install @anthropic-ai/claude-agent-sdk@${latest.sdkVersion} --save-exact && npm run typecheck && npm test && ` +
