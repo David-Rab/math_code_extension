@@ -1,6 +1,6 @@
 // Loads the production bundle with a stub `vscode` module and runs activate(),
 // to catch load-time errors (e.g. the import.meta shim) before installing.
-// Keep the real %TEMP%/claude-panel.log free of test runs.
+// Keep the real %TEMP%/mathpanel.log free of test runs.
 process.env.TEMP = process.env.TMP = require('node:fs').mkdtempSync(require('node:path').join(require('node:os').tmpdir(), 'cp-smoke-'));
 const Module = require('node:module');
 const path = require('node:path');

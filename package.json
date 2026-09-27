@@ -1,11 +1,11 @@
 {
-  "name": "claude-panel",
-  "displayName": "Claude Panel (personal)",
-  "description": "Conversation-first Claude Code panel: subagent tabs, LaTeX rendering, full status bar.",
+  "name": "mathpanel",
+  "displayName": "MathPanel (unofficial)",
+  "description": "Unofficial conversation-first panel for Claude Code: subagent tabs, LaTeX rendering, status bar. Not affiliated with Anthropic.",
   "version": "0.1.283",
   "publisher": "david-local",
   "private": true,
-  "license": "UNLICENSED",
+  "license": "MIT",
   "type": "module",
   "engines": {
     "vscode": "^1.94.0"
@@ -20,69 +20,69 @@
       {
         "command": "claudePanel.newSession",
         "title": "New Session",
-        "category": "Claude Panel",
+        "category": "MathPanel",
         "icon": "$(add)"
       },
       {
         "command": "claudePanel.openSession",
         "title": "Open Previous Session…",
-        "category": "Claude Panel",
+        "category": "MathPanel",
         "icon": "$(history)"
       },
       {
         "command": "claudePanel.refreshSessions",
         "title": "Refresh Sessions",
-        "category": "Claude Panel",
+        "category": "MathPanel",
         "icon": "$(refresh)"
       },
       {
         "command": "claudePanel.toggleMath",
         "title": "Toggle Math Rendering",
-        "category": "Claude Panel"
+        "category": "MathPanel"
       },
       {
         "command": "claudePanel.checkForUpdates",
         "title": "Check for Claude Code Updates",
-        "category": "Claude Panel"
+        "category": "MathPanel"
       },
       {
         "command": "claudePanel.showLog",
         "title": "Show Log",
-        "category": "Claude Panel"
+        "category": "MathPanel"
       },
       {
         "command": "claudePanel.renameSession",
         "title": "Rename Session…",
-        "category": "Claude Panel",
+        "category": "MathPanel",
         "icon": "$(edit)"
       },
       {
         "command": "claudePanel.forkSession",
         "title": "Fork Session",
-        "category": "Claude Panel",
+        "category": "MathPanel",
         "icon": "$(repo-forked)"
       },
       {
         "command": "claudePanel.deleteSession",
         "title": "Delete Session…",
-        "category": "Claude Panel",
+        "category": "MathPanel",
         "icon": "$(trash)"
       },
       {
         "command": "claudePanel.agentMap",
         "title": "Show Agent Map",
-        "category": "Claude Panel",
+        "category": "MathPanel",
         "icon": "$(type-hierarchy)"
       },
       {
         "command": "claudePanel.signIn",
         "title": "Sign In to Claude",
-        "category": "Claude Panel"
+        "category": "MathPanel"
       },
       {
         "command": "claudePanel.reportProblem",
         "title": "Report a Problem…",
-        "category": "Claude Panel",
+        "category": "MathPanel",
         "icon": "$(report)"
       }
     ],
@@ -90,7 +90,7 @@
       "activitybar": [
         {
           "id": "claudePanel",
-          "title": "Claude Panel",
+          "title": "MathPanel",
           "icon": "resources/activity.svg"
         }
       ]
@@ -172,7 +172,7 @@
       ]
     },
     "configuration": {
-      "title": "Claude Panel",
+      "title": "MathPanel",
       "properties": {
         "claudePanel.renderMath": {
           "type": "boolean",
@@ -306,7 +306,7 @@
     "watch": "node build.mjs --watch",
     "typecheck": "tsc --noEmit",
     "replay": "esbuild test/replay.ts --bundle --platform=node --format=esm --outfile=.test/replay.mjs --log-level=warning && node .test/replay.mjs",
-    "package": "node scripts/sync-version.mjs && node build.mjs --production && node test/smoke.cjs && vsce package --no-dependencies --skip-license --allow-missing-repository --ignoreFile .vscodeignore.generated -o claude-panel.vsix",
+    "package": "node scripts/sync-version.mjs && node build.mjs --production && node test/smoke.cjs && vsce package --no-dependencies --allow-missing-repository --ignoreFile .vscodeignore.generated -o mathpanel.vsix",
     "test-md": "esbuild test/markdown.ts --bundle --platform=node --format=esm --outfile=.test/markdown.mjs --log-level=warning && node .test/markdown.mjs",
     "e2e": "esbuild test/e2e.ts --bundle --platform=node --format=esm --outfile=.test/e2e.mjs --log-level=warning --alias:vscode=./test/mock-vscode.ts --external:@anthropic-ai/claude-agent-sdk && node .test/e2e.mjs",
     "harness": "esbuild test/harness.ts --bundle --platform=node --format=esm --outfile=.test/harness.mjs --log-level=warning --external:@anthropic-ai/claude-agent-sdk && node .test/harness.mjs",

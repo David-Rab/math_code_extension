@@ -10,7 +10,7 @@ import type { ChatSession } from './session';
 
 export async function reportProblem(extPath: string, session: ChatSession | undefined) {
   const description = await vscode.window.showInputBox({
-    title: 'Report a problem with Claude Panel',
+    title: 'Report a problem with MathPanel',
     prompt: 'What went wrong, and what did you expect? (Saved locally for Claude to fix.)',
     placeHolder: 'e.g. the rewind menu did nothing when I clicked "Rewind code to here"',
     ignoreFocusOut: true,

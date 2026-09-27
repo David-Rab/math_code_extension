@@ -69,8 +69,8 @@ export function activate(ctx: vscode.ExtensionContext) {
   );
 
   const status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
-  status.text = '$(comment-discussion) Claude';
-  status.tooltip = 'New Claude Panel session';
+  status.text = '$(comment-discussion) MathPanel';
+  status.tooltip = 'New MathPanel session';
   status.command = 'claudePanel.newSession';
   status.show();
   ctx.subscriptions.push(status);
@@ -109,7 +109,7 @@ function openPanel(resumeId?: string, cwd = defaultCwd(), prefill?: string) {
   }
   const panel = vscode.window.createWebviewPanel(
     VIEW_TYPE,
-    'Claude',
+    'New session',
     { viewColumn: vscode.ViewColumn.Beside, preserveFocus: false },
     { enableFindWidget: true, retainContextWhenHidden: true },
   );
@@ -288,7 +288,7 @@ async function checkForUpdates(ctx: vscode.ExtensionContext, manual: boolean): P
     return false;
   }
   if (!newer(l.claudeCodeVersion, info.claudeCodeVersion)) {
-    if (manual) void vscode.window.showInformationMessage(`Claude Panel is up to date (Claude Code ${info.claudeCodeVersion}).`);
+    if (manual) void vscode.window.showInformationMessage(`MathPanel is up to date (Claude Code ${info.claudeCodeVersion}).`);
     return true;
   }
   // Notify once per new version, not on every periodic check.

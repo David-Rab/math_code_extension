@@ -1,9 +1,29 @@
-# Claude Panel (personal)
+# MathPanel (unofficial)
 
-A conversation-first VS Code panel for Claude Code. It runs the same engine as
-the official extension (the Agent SDK driving a bundled `claude.exe`) and adds
-what the official panel lacks for this user: a clean conversation view, a tab
-per subagent, and rendered math.
+> **Unofficial personal project. Not affiliated with, endorsed by, or supported
+> by Anthropic.** Claude and Claude Code are trademarks of Anthropic PBC.
+
+An alternative, conversation-first VS Code panel for Claude Code. It runs
+Claude Code through Anthropic's public Agent SDK (`@anthropic-ai/claude-agent-sdk`)
+and adds a clean conversation view, a tab per subagent, and rendered math.
+
+## Your account and Anthropic's terms
+
+- Build it yourself and sign in with **your own** account, through Claude Code's
+  own login (`claude auth login`, run by the panel in a terminal). The panel
+  never sees, stores or forwards credentials, and does not offer, provide or
+  share Claude access.
+- Your use is governed by your own agreement with Anthropic (Consumer Terms for
+  Free/Pro/Max plans, Commercial Terms for API keys). Subscription plans are
+  meant for ordinary individual use; for anything beyond that, use an API key.
+  Anthropic may restrict subscription use in third-party tools: use at your own
+  risk.
+- **Do not redistribute built `.vsix` files, and do not publish this to the VS
+  Code Marketplace or Open VSX.** A build contains Anthropic's proprietary
+  Claude Code binary and SDK, which this repository's license does not cover.
+- Some features rely on undocumented or experimental SDK options
+  (`workspaceTrust`, `enableRemoteControl`, `usage_EXPERIMENTAL_…`) that may
+  change or stop working in a future Claude Code release.
 
 ## Features
 
@@ -13,12 +33,12 @@ per subagent, and rendered math.
   a warning bar when a background tab needs you. **Agent map** (⌬, Ctrl+Shift+M):
   a tree of all agents with status, model, running time and actions.
 - **Math:** KaTeX for `$…$`, `$$…$$`, `\(…\)`, `\[…\]` and `align`-style
-  environments; ∑ toggles to source. `\F \Q \C \E` built in, more via
-  `claudePanel.mathMacros`. Copy button keeps the LaTeX.
+  environments; ∑ toggles to source. `\F \Q \C \E` built in, more via the
+  `mathMacros` setting. Copy button keeps the LaTeX.
 - **Status bar:** model, effort, permission mode, context %, cache %, 5-hour and
   7-day plan usage, remote control, Claude Code version, ⚑ report a problem.
-- **Cards:** permission prompts, Claude's questions, plan approval, sign-in,
-  folder trust.
+- **Cards:** permission prompts (with the edit or file content and Claude Code's
+  reason), Claude's questions, plan approval, sign-in, folder trust.
 - **Progress list:** Claude's checklist above the message box, per tab.
 - **Images:** paste or drop into the message box (scaled to 1568 px).
 - **Rewind:** on your messages (↶): rewind code, fork the conversation from
@@ -33,18 +53,28 @@ per subagent, and rendered math.
   every 6 h), shows the changelog, and can rebuild. Unknown events from Claude
   Code appear as "Unsupported event" cards instead of being dropped.
 
+The **Auto** permission mode lets Claude Code's classifier approve many actions
+without asking; it prompts much less than "Ask before edits".
+
 ## Safety
 
 - The webview loads no remote content: images in replies render as links,
   Markdown raw HTML is off, KaTeX runs untrusted.
+- Links in replies: web links open in the browser; network paths and other URI
+  schemes are refused; files outside the project need confirmation.
+- No program is started by bare name from a workspace folder; system tools are
+  started by full path.
 - Settings that choose the executable, permission mode or remote control are
   user-level only; a folder's `.vscode/settings.json` cannot set them. The panel
   never uses `bypassPermissions`.
 - Folder trust and sign-in go through Claude Code itself; the panel never
-  writes `~/.claude.json` or touches credentials.
+  writes `~/.claude.json` or touches credentials. Trust covers the whole git
+  repository containing the folder.
 - Rewinding code and deleting sessions ask for confirmation first.
 
 ## Build, test, install
+
+Windows only for now (the build bundles the win32-x64 Claude Code binary).
 
 ```sh
 npm install
@@ -53,8 +83,8 @@ npm test                     # transcript replay, unit, Markdown/LaTeX
 node test/smoke.cjs          # production bundle loads (after a build)
 npm run e2e -- <dir>         # live session against claude.exe (Haiku)
 npm run trust-e2e -- <dir>   # live folder-trust flow (fresh dir)
-npm run package              # claude-panel.vsix
-code --install-extension claude-panel.vsix --force
+npm run package              # mathpanel.vsix, for your own machine only
+code --install-extension mathpanel.vsix --force
 ```
 
 Render benchmark on a stored session (needs Chrome):
@@ -66,8 +96,8 @@ node test/cdp.mjs .test/harness/b.html .test/harness/b.png
 
 ## Bug reports
 
-⚑ in the panel saves a report to `bug-reports/` (git-ignored). A Claude session
-in this project checks open reports first (see CLAUDE.md).
+⚑ in the panel saves a report to `bug-reports/` (git-ignored, stays on your
+machine).
 
 ## Layout
 
@@ -81,4 +111,12 @@ in this project checks open reports first (see CLAUDE.md).
 | `src/notify.ts`, `src/report.ts`, `src/updates.ts` | notifications, problem reports, updates |
 | `webview/` | the panel UI (Preact), Markdown + KaTeX renderer, styles |
 | `test/` | replay, unit, renderer, e2e, trust e2e, benchmark harness |
-| `spike/` | the original feasibility probes and findings |
+
+## License and third-party software
+
+This repository's code is MIT-licensed (see [LICENSE](LICENSE)); that license
+does not cover Anthropic's SDK or Claude Code. The panel uses, via npm:
+[preact](https://github.com/preactjs/preact) (MIT),
+[markdown-it](https://github.com/markdown-it/markdown-it) and its dependencies
+(MIT; `entities` BSD-2-Clause), and [KaTeX](https://github.com/KaTeX/KaTeX)
+including its fonts (MIT, Khan Academy and other contributors).

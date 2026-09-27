@@ -34,10 +34,10 @@ export function readConfig(): Config {
 }
 
 let channel: vscode.OutputChannel | undefined;
-/** Also written to %TEMP%/claude-panel.log (trimmed at 2 MB) for diagnosing problems after the fact. */
-export const logFile = path.join(os.tmpdir(), 'claude-panel.log');
+/** Also written to %TEMP%/mathpanel.log (trimmed at 2 MB) for diagnosing problems after the fact. */
+export const logFile = path.join(os.tmpdir(), 'mathpanel.log');
 export function log(line: string) {
-  channel ??= vscode.window.createOutputChannel('Claude Panel');
+  channel ??= vscode.window.createOutputChannel('MathPanel');
   const stamped = `${new Date().toISOString().slice(0, 23)} ${line}`;
   channel.appendLine(stamped);
   try {
@@ -49,7 +49,7 @@ export function log(line: string) {
 }
 
 export function showLog() {
-  channel ??= vscode.window.createOutputChannel('Claude Panel');
+  channel ??= vscode.window.createOutputChannel('MathPanel');
   channel.show(true);
 }
 
