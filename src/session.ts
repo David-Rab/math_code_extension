@@ -42,6 +42,9 @@ export interface SessionHooks {
   stderr: (data: string) => void;
 }
 
+/** A saved conversation updated more recently than this is probably still open somewhere else. */
+const ACTIVE_ELSEWHERE_MS = 5 * 60_000;
+
 /** Permission modes the panel will ever set. Never bypassPermissions. */
 const SAFE_MODES = new Set(['default', 'acceptEdits', 'plan', 'auto', 'dontAsk']);
 
@@ -156,6 +159,11 @@ export class ChatSession {
       this.pushStatus();
       return;
     }
+    if (this.activeElsewhere) {
+      this.status.starting = false;
+      this.pushStatus();
+      return; // starts only if you choose to continue it here
+    }
     if (!this.resumeId || this.panel.visible) {
       this.spawn();
       return;
@@ -187,7 +195,20 @@ export class ChatSession {
       for (const agentId of await listSubagents(id, { dir: this.cwd })) {
         for (const m of await getSubagentMessages(id, agentId, { dir: this.cwd })) this.transcript.handle(m, true);
       }
-      for (const t of this.transcript.threads.values()) if (t.status === 'running') this.transcript.updateThread(t.id, { status: 'done' });
+      // Not finished when last saved: it may still be running in another window, or it was cut off.
+      for (const t of this.transcript.threads.values())
+        if (t.status === 'running' && t.id !== 'main') this.transcript.updateThread(t.id, { status: 'unknown', endedAt: undefined });
+      const age = info?.lastModified ? Date.now() - info.lastModified : Infinity;
+      if (age < ACTIVE_ELSEWHERE_MS) {
+        this.activeElsewhere = true;
+        this.transcript.updateThread('main', { status: 'unknown' });
+        const ago = age < 60_000 ? 'less than a minute ago' : `${Math.round(age / 60_000)} minutes ago`;
+        this.transcript.notice(
+          'main',
+          'warn',
+          `This conversation was last updated ${ago}, so it is probably still open in another window (for example the official extension). This panel shows what was saved so far and does not update live. Sending a message here would continue it in two places at once.`,
+        );
+      }
     } catch (e) {
       this.transcript.notice('main', 'error', `Could not load history: ${(e as Error).message}`);
     }
@@ -200,6 +221,8 @@ export class ChatSession {
 
   private trustWarned = false;
   private restrictedNoticeShown = false;
+  /** Loaded from a conversation that was updated moments ago, probably in another window. */
+  private activeElsewhere = false;
   private onStderr(d: string) {
     log(`[${this.sessionId ?? 'new'}] ${d.trimEnd()}`);
     // Claude Code prints this when the folder was never trusted; project
@@ -559,6 +582,18 @@ export class ChatSession {
         }
         return;
       case 'send':
+        if (this.activeElsewhere && !this.q) {
+          const choice = await vscode.window.showWarningMessage(
+            'Continue this conversation here?',
+            { modal: true, detail: 'It was updated a few minutes ago and is probably still open in another window. If it is, both would continue the same conversation at once. Close it there first, or start a new session instead.' },
+            'Continue here',
+          );
+          if (choice !== 'Continue here') {
+            this.post({ t: 'prefill', text: m.text });
+            return;
+          }
+          this.activeElsewhere = false;
+        }
         return this.send(m.text, m.images);
       case 'rewind':
         return this.rewind(m.uuid, m.mode);

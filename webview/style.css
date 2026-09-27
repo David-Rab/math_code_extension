@@ -242,3 +242,4 @@ a.stat { color: var(--vscode-textLink-foreground); cursor: pointer; text-decorat
 
 /* --- sign-in --- */
 .card.signin.pending { border-color: var(--vscode-editorWarning-foreground, #cca700); }
+.dot.unknown { border: 2px dashed var(--muted); opacity: 0.8; }

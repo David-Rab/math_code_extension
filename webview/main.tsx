@@ -236,6 +236,7 @@ function MapButton({ threads, items }: { threads: ThreadMeta[]; items: Record<st
 
 function elapsed(t: ThreadMeta, now: number): string {
   if (!t.startedAt) return '';
+  if (t.status === 'unknown') return ''; // no honest duration: it had not finished when saved
   const s = Math.max(0, Math.round(((t.endedAt ?? now) - t.startedAt) / 1000));
   if (s < 60) return `${s}s`;
   if (s < 3600) return `${Math.floor(s / 60)}m ${s % 60}s`;
@@ -360,6 +361,7 @@ function StatusDot({ status }: { status: ThreadMeta['status'] }) {
   if (status === 'running') return <span class="dot running" title="Running" />;
   if (status === 'error') return <span class="dot error" title="Failed" />;
   if (status === 'stopped') return <span class="dot stopped" title="Stopped" />;
+  if (status === 'unknown') return <span class="dot unknown" title="Not finished when last saved: may still be running elsewhere" />;
   return <span class="dot done" title="Idle / finished" />;
 }
 
@@ -504,7 +506,7 @@ function SubagentHeader({ thread }: { thread: ThreadMeta }) {
 }
 
 function statusWord(s: ThreadMeta['status']) {
-  return { running: 'running', done: 'finished', error: 'failed', stopped: 'stopped' }[s];
+  return { running: 'running', done: 'finished', error: 'failed', stopped: 'stopped', unknown: 'not finished when saved' }[s];
 }
 
 // Streaming reply: finished paragraphs render once (memoized, cached HTML);

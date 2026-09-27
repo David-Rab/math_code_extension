@@ -1,6 +1,7 @@
 // Types shared by the extension host and the webview.
 
-export type ThreadStatus = 'running' | 'done' | 'error' | 'stopped';
+// 'unknown': loaded from a saved conversation in which it had not finished (it may still be running elsewhere).
+export type ThreadStatus = 'running' | 'done' | 'error' | 'stopped' | 'unknown';
 
 export interface ThreadMeta {
   id: string; // 'main' or the tool_use id of the Agent call that started it

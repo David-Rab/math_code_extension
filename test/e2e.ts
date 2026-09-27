@@ -215,7 +215,12 @@ check('history: your prompts shown', items(s2).some((i: any) => i.kind === 'user
 check('history: replies shown', texts(s2).some((t) => /red/i.test(t)));
 check('history: sent image shown', items(s2).some((i: any) => i.kind === 'user' && i.images?.length === 1));
 check('history: progress list rebuilt', (s2.transcript.todos.get('main') ?? []).length >= 3);
+check('recently active conversation: warned it may be open elsewhere', items(s2).some((i: any) => i.kind === 'notice' && /probably still open in another window/.test(i.text)));
+check('recently active conversation: not started on its own', !(s2 as any).q);
+const warnsBefore = shown.length;
 panel2.fromView({ t: 'send', text: 'Reply with only the word: resumed' });
+await sleep(500);
+check('asks before continuing it here', shown.slice(warnsBefore).some((m) => m.level === 'warn' && /Continue this conversation here/.test(m.text)));
 check('resumed session answers', await waitIdle(s2, 120000));
 check('resumed session remembers', texts(s2).some((t) => /resumed/i.test(t)) && s2.status.sessionId === sessionId, `${s2.status.sessionId} vs ${sessionId}`);
 panel2.dispose();
