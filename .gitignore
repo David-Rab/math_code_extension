@@ -3,3 +3,4 @@ dist/
 *.vsix
 .test/
 .vscodeignore.generated
+bug-reports/

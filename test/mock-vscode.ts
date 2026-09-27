@@ -25,9 +25,11 @@ export const window = {
     return rest.find((r) => typeof r === 'string');
   },
   onDidCloseTerminal: () => ({ dispose() {} }),
+  showInputBox: async () => (settings.__inputBox as string | undefined),
 };
 
 export const commands = { executeCommand: async () => undefined };
+export const version = 'test';
 export const env = { openExternal: async () => true };
 export const ConfigurationTarget = { Global: 1 };
 export const ViewColumn = { One: 1, Beside: -2 };

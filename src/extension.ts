@@ -9,6 +9,7 @@ import { readConfig, log, setBundledExecutable, showLog } from './config';
 import { readBuildInfo, fetchLatest, newer, showChangelog, runUpdate, type Latest } from './updates';
 import { checkAuth, signIn } from './auth';
 import { initTrust } from './trust';
+import { reportProblem } from './report';
 
 const VIEW_TYPE = 'claudePanel.chat';
 const sessions = new Set<ChatSession>();
@@ -44,6 +45,7 @@ export function activate(ctx: vscode.ExtensionContext) {
     vscode.commands.registerCommand('claudePanel.deleteSession', (e?: SessionEntry) => deleteCmd(e)),
     vscode.commands.registerCommand('claudePanel.agentMap', () => lastActive?.panel.webview.postMessage({ t: 'showAgentMap' })),
     vscode.commands.registerCommand('claudePanel.signIn', () => signIn()),
+    vscode.commands.registerCommand('claudePanel.reportProblem', () => reportProblem(ctx.extensionPath, lastActive)),
     vscode.commands.registerCommand('claudePanel.toggleMath', () => {
       const c = vscode.workspace.getConfiguration('claudePanel');
       return c.update('renderMath', !c.get('renderMath', true), vscode.ConfigurationTarget.Global);

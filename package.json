@@ -78,6 +78,12 @@
         "command": "claudePanel.signIn",
         "title": "Sign In to Claude",
         "category": "Claude Panel"
+      },
+      {
+        "command": "claudePanel.reportProblem",
+        "title": "Report a Problem…",
+        "category": "Claude Panel",
+        "icon": "$(report)"
       }
     ],
     "viewsContainers": {
@@ -108,6 +114,11 @@
           "command": "claudePanel.refreshSessions",
           "when": "view == claudePanel.sessions",
           "group": "navigation@2"
+        },
+        {
+          "command": "claudePanel.reportProblem",
+          "when": "view == claudePanel.sessions",
+          "group": "9_report@1"
         }
       ],
       "view/item/context": [
@@ -152,6 +163,11 @@
           "command": "claudePanel.deleteSession",
           "when": "activeWebviewPanelId == claudePanel.chat",
           "group": "9_delete@1"
+        },
+        {
+          "command": "claudePanel.reportProblem",
+          "when": "activeWebviewPanelId == claudePanel.chat",
+          "group": "8_report@1"
         }
       ]
     },

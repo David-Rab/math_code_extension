@@ -613,6 +613,9 @@ export class ChatSession {
       case 'refreshStatus':
         await this.refreshContext();
         return;
+      case 'reportProblem':
+        await vscode.commands.executeCommand('claudePanel.reportProblem');
+        return;
       case 'log':
         log(`[view] ${m.text}`);
         return;

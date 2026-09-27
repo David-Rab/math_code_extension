@@ -141,4 +141,5 @@ export type ViewToHost =
   | { t: 'findFiles'; query: string }
   | { t: 'refreshStatus' }
   | { t: 'runUpdate' }
-  | { t: 'log'; text: string };
+  | { t: 'log'; text: string }
+  | { t: 'reportProblem' };

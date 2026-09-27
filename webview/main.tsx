@@ -1169,6 +1169,9 @@ function StatusBar({ status, config }: { status: Status; config: ViewConfig }) {
         <option value="detailed">tools: detailed</option>
       </select>
       <span class="grow" />
+      <button class="toggle" title="Report a problem with this panel" onClick={() => send({ t: 'reportProblem' })}>
+        ⚑
+      </button>
       {status.update ? (
         <button class="update" title={`Claude Code ${status.update.latest} is available (you have ${status.update.current})`} onClick={() => send({ t: 'runUpdate' })}>
           ↑ {status.update.latest}
