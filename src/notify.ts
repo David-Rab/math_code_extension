@@ -2,6 +2,7 @@
 // Both only fire when you are not already looking at that panel.
 import * as vscode from 'vscode';
 import * as fs from 'node:fs';
+import * as path from 'node:path';
 import { spawn } from 'node:child_process';
 import { log } from './config';
 
@@ -25,7 +26,9 @@ function playSound(kind: NotifyKind) {
   if (!/\.wav$/i.test(file) || !fs.existsSync(file)) return;
   lastSound = Date.now();
   // The path travels in an environment variable, never inside the command text.
-  const p = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', '(New-Object System.Media.SoundPlayer $env:CLAUDE_PANEL_SOUND).PlaySync()'], {
+  // Full path: never let a program found via the current directory or PATH stand in for PowerShell.
+  const ps = path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+  const p = spawn(ps, ['-NoProfile', '-NonInteractive', '-Command', '(New-Object System.Media.SoundPlayer $env:CLAUDE_PANEL_SOUND).PlaySync()'], {
     env: { ...process.env, CLAUDE_PANEL_SOUND: file },
     windowsHide: true,
     detached: true,

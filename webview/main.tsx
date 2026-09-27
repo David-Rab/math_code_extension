@@ -753,12 +753,16 @@ function Permission({ item }: { item: Extract<Item, { kind: 'permission' }> }) {
       <div class="card-title">
         {pending ? 'Allow' : { allowed: 'Allowed', denied: 'Denied', cancelled: 'Cancelled', pending: '' }[item.state]} <strong>{item.tool}</strong>
         {pending ? '?' : ''}
+        {item.title && <span class="muted"> — {item.title}</span>}
       </div>
+      {item.explanation && <div class="explanation">{item.explanation}</div>}
       <pre class="detail">{item.detail}</pre>
       {pending && (
         <>
           <div class="buttons">
-            <button onClick={() => send({ t: 'permission', id: item.id, allow: true })}>Allow</button>
+            <button class={item.defaultToNo ? 'secondary' : ''} onClick={() => send({ t: 'permission', id: item.id, allow: true })}>
+              Allow
+            </button>
             {item.suggestions.map((s, i) => (
               <button key={i} class="secondary" onClick={() => send({ t: 'permission', id: item.id, allow: true, suggestion: i })}>
                 {s}

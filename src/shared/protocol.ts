@@ -43,8 +43,11 @@ export type Item =
       kind: 'permission';
       id: string;
       tool: string;
+      title?: string; // Claude Code's own sentence for this request
+      explanation?: string; // why it is asking (reason, blocked path, description)
       detail: string;
       suggestions: string[];
+      defaultToNo?: boolean;
       state: 'pending' | 'allowed' | 'denied' | 'cancelled';
     }
   | { kind: 'question'; id: string; questions: Question[]; state: 'pending' | 'answered' | 'cancelled'; answers?: Record<string, string> }

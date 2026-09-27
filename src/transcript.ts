@@ -488,10 +488,19 @@ export function describeForPermission(name: string, input: any): string {
     case 'Bash':
     case 'PowerShell':
       return (input.description ? input.description + '\n' : '') + '$ ' + String(input.command ?? '');
-    case 'Write':
-      return `Create/overwrite ${input.file_path}`;
-    case 'Edit':
-      return `Edit ${input.file_path}`;
+    case 'Write': {
+      const content = String(input.content ?? '');
+      const lines = content.split('\n');
+      const preview = lines.slice(0, 40).join('\n') + (lines.length > 40 ? `\n… (${lines.length - 40} more lines)` : '');
+      return `Create/overwrite ${input.file_path}\n\n${preview}`;
+    }
+    case 'Edit': {
+      const cut = (s: unknown) => {
+        const t = String(s ?? '');
+        return t.length > 1500 ? t.slice(0, 1500) + '…' : t;
+      };
+      return `Edit ${input.file_path}${input.replace_all ? ' (every occurrence)' : ''}\n\n— replace:\n${cut(input.old_string)}\n\n— with:\n${cut(input.new_string)}`;
+    }
     case 'NotebookEdit':
       return `Edit notebook ${input.notebook_path}`;
     case 'WebFetch':

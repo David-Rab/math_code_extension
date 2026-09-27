@@ -335,8 +335,19 @@ export class ChatSession {
     if (!this.q) this.spawn();
   }
 
+  /** Deny everything still waiting for an answer and mark the cards as cancelled. */
+  private cancelPending(message: string) {
+    for (const [id, p] of this.pending) {
+      p.resolve({ behavior: 'deny', message });
+      const item = this.transcript.findItem(p.threadId, id);
+      if (item && 'state' in item) this.transcript.put(p.threadId, { ...item, state: 'cancelled' } as Item);
+    }
+    this.pending.clear();
+  }
+
   /** Close the running claude.exe and start it again on the same conversation. */
   private restartProcess() {
+    this.cancelPending('Claude Code restarted.');
     const old = this.q;
     this.q = undefined;
     try {
@@ -386,16 +397,7 @@ export class ChatSession {
     if (item?.kind !== 'signin' || item.state === 'done') return;
     this.transcript.put('main', { ...item, state: 'done' });
     // Restart the process so it picks up the new credentials; the conversation continues.
-    if (this.q) {
-      const old = this.q;
-      this.q = undefined;
-      try {
-        old.close();
-      } catch {
-        /* already gone */
-      }
-      this.spawn();
-    }
+    if (this.q) this.restartProcess();
   }
 
   private setBusy(busy: boolean) {
@@ -489,8 +491,20 @@ export class ChatSession {
         item = { kind: 'plan', id, plan: String((input as any).plan ?? ''), state: 'pending' };
         this.pending.set(id, { kind: 'plan', threadId, input, resolve });
       } else {
-        const suggestions = ctx.suggestions ?? [];
-        item = { kind: 'permission', id, tool: toolName, detail: describeForPermission(toolName, input), suggestions: suggestions.map(permissionLabel), state: 'pending' };
+        // "Always allow" options are offered only when Claude Code allows them, and never switch to an unsafe mode.
+        const suggestions = ctx.suppressAlwaysAllowRule ? [] : (ctx.suggestions ?? []).filter((u) => u.type !== 'setMode' || SAFE_MODES.has(u.mode));
+        const explanation = [ctx.description, ctx.decisionReason, ctx.blockedPath ? `Path: ${ctx.blockedPath}` : ''].filter(Boolean).join('\n');
+        item = {
+          kind: 'permission',
+          id,
+          tool: ctx.displayName || toolName,
+          title: ctx.title,
+          explanation: explanation || undefined,
+          detail: describeForPermission(toolName, input),
+          suggestions: suggestions.map(permissionLabel),
+          defaultToNo: ctx.defaultToNo,
+          state: 'pending',
+        };
         this.pending.set(id, { kind: 'permission', threadId, input, suggestions, resolve });
       }
       this.transcript.put(threadId, item);
@@ -553,7 +567,8 @@ export class ChatSession {
         if (p?.kind !== 'permission') return;
         const item = this.transcript.findItem(p.threadId, m.id);
         if (m.allow) {
-          const upd = m.suggestion !== undefined ? [p.suggestions[m.suggestion]] : undefined;
+          const valid = Number.isInteger(m.suggestion) && m.suggestion! >= 0 && m.suggestion! < p.suggestions.length;
+          const upd = valid ? [p.suggestions[m.suggestion!]] : undefined;
           p.resolve({ behavior: 'allow', updatedInput: p.input, updatedPermissions: upd });
           const mode = upd?.find((u) => u.type === 'setMode');
           if (mode && mode.type === 'setMode') this.status.permissionMode = mode.mode;
@@ -769,15 +784,43 @@ async function updateViewConfig(patch: Partial<ViewConfig>) {
   for (const [k, v] of Object.entries(patch)) await c.update(keys[k as keyof ViewConfig], v, vscode.ConfigurationTarget.Global);
 }
 
+function isInside(file: string, root: string) {
+  const rel = path.relative(root, file);
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+}
+
+/**
+ * Open a link from a reply. Web links go to the browser (VS Code asks about
+ * untrusted domains). Anything else must be a file: network paths
+ * (\\server\share) and other URI schemes are refused, because opening a network
+ * path makes Windows connect to that server with your login; files outside
+ * the project need a confirmation.
+ */
 async function openLink(href: string, cwd: string) {
-  if (/^(https?|mailto):/i.test(href)) {
+  if (/^https?:\/\//i.test(href) || /^mailto:/i.test(href)) {
     await vscode.env.openExternal(vscode.Uri.parse(href));
     return;
   }
   const m = href.match(/^(.*?)(?:#L(\d+)(?:-L?(\d+))?)?$/);
   if (!m) return;
-  let file = decodeURIComponent(m[1]).replace(/^file:\/\/\/?/, '');
-  if (!path.isAbsolute(file)) file = path.join(cwd, file);
+  let file: string;
+  try {
+    file = decodeURIComponent(m[1]);
+  } catch {
+    return;
+  }
+  const scheme = /^[a-z][a-z0-9+.-]*:/i.test(file) && !/^[a-z]:[\\/]/i.test(file);
+  if (/^[\\/]{2}/.test(file) || scheme) {
+    log(`refused link ${JSON.stringify(href).slice(0, 200)}`);
+    void vscode.window.showWarningMessage(`Not opened: ${file.slice(0, 120)} is not a web link or a local file.`);
+    return;
+  }
+  file = path.resolve(cwd, file);
+  const roots = [cwd, ...(vscode.workspace.workspaceFolders ?? []).map((f) => f.uri.fsPath)];
+  if (!roots.some((r) => isInside(file, r))) {
+    const ok = await vscode.window.showWarningMessage('Open a file outside this project?', { modal: true, detail: file }, 'Open');
+    if (ok !== 'Open') return;
+  }
   const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(file));
   const line = m[2] ? Math.max(0, Number(m[2]) - 1) : 0;
   const end = m[3] ? Math.max(line, Number(m[3]) - 1) : line;

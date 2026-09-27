@@ -87,7 +87,7 @@ export function runUpdate(info: BuildInfo, latest: Latest, development: boolean)
     void vscode.window.showErrorMessage(`Claude Panel source folder not found: ${info.sourceDir}`);
     return;
   }
-  const term = vscode.window.createTerminal({ name: 'Claude Panel update', cwd: info.sourceDir, shellPath: 'cmd.exe' });
+  const term = vscode.window.createTerminal({ name: 'Claude Panel update', cwd: info.sourceDir, shellPath: path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'cmd.exe') });
   term.show();
   term.sendText(
     `npm install @anthropic-ai/claude-agent-sdk@${latest.sdkVersion} --save-exact && npm run typecheck && npm test && ` +
