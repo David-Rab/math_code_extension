@@ -31,6 +31,10 @@ for (const f of fs.readdirSync('dist/bin')) {
     /* still in use; removed by a later build */
   }
 }
+// Package only the current binary, even if an older one is still locked by a running preview.
+const stale = fs.readdirSync('dist/bin').filter((f) => f !== exeName && /\.exe$/.test(f));
+const ignore = [fs.readFileSync('.vscodeignore', 'utf8').trimEnd(), ...stale.map((f) => `dist/bin/${f}`)];
+fs.writeFileSync('.vscodeignore.generated', ignore.join('\n') + '\n');
 fs.writeFileSync(
   'dist/build-info.json',
   JSON.stringify({ sdkVersion: sdkPkg.version, claudeCodeVersion: sdkPkg.claudeCodeVersion, exe: `bin/${exeName}`, sourceDir: process.cwd(), builtAt: new Date().toISOString() }, null, 2),
