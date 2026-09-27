@@ -19,6 +19,21 @@ Reads only your text messages, never tool calls, diffs or command output: put ev
 - Commit after each working step (git repo, branch `main`, remote `origin` on GitHub). The repo is public: never commit personal data (paths with the username, session or account ids, recorded sessions that aren't scrubbed, private project names); commits use the GitHub noreply email.
 - Internal ids stay `claudePanel.*` (settings, commands, view types) so user settings and open panels carry over; visible names say MathPanel.
 
+## Before every commit (the repo is public)
+
+Nothing private or unsafe may ever reach a commit. Before each commit:
+
+1. **Run `npm run precommit`**: typecheck, all tests, and the privacy check on the staged files. The same privacy check also runs as the git pre-commit hook (`scripts/privacy-check.mjs`, installed by `npm install`) and blocks the commit on any finding. Never bypass it (`--no-verify`), never weaken its rules to get a commit through, and fix the content instead.
+2. **Read the staged diff yourself** (`git diff --cached`) for what a pattern cannot catch:
+   - the user's private work: math project names, research topics, conversation excerpts, screenshots;
+   - recorded sessions or logs: every path must be `C:\Users\user\…`, session, request and message ids must be placeholders, thinking `signature` values must be `"sig"` (real ones encode the account's organization id), and there must be no connector lists, usage or plan data;
+   - any name other than `David-Rab` / `david-local`.
+
+   Add new private strings to `.privacy-denylist` (git-ignored, one per line) so the check catches them from then on.
+3. **Safety review** when the diff touches process launches, links, the webview/CSP, permission handling, setting scopes, trust, sign-in or the update path. Check it against the Safety rules below, and add or adjust a test for the change.
+4. **Commit with the GitHub noreply address** (this repo's `user.email`). Never commit build output, `.vsix` files, `bug-reports/` or anything from `.test/`.
+5. **If something private was committed anyway**, removing it in a new commit is not enough, because it stays in history. Before pushing, rewrite the history to remove it, and tell the user. If it was already pushed, tell the user immediately: GitHub keeps pushed commits reachable, so the repo may need to be deleted and recreated.
+
 ## Updating Claude Code
 
 When the panel reports a new Claude Code release: read that version's section of the Claude Code CHANGELOG, `npm install @anthropic-ai/claude-agent-sdk@<version> --save-exact`, diff the message types in `sdk.d.ts` against the previous version and classify any new ones in `src/transcript.ts`, then typecheck, test, build, smoke, live e2e, commit. `npm run package` builds `mathpanel.vsix` (extension version follows the Claude Code patch number) for this machine only: never publish or redistribute a build (it contains Anthropic's proprietary binary).

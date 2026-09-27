@@ -4,3 +4,4 @@ dist/
 .test/
 .vscodeignore.generated
 bug-reports/
+.privacy-denylist
