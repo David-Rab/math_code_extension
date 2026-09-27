@@ -306,7 +306,7 @@
     "watch": "node build.mjs --watch",
     "typecheck": "tsc --noEmit",
     "replay": "esbuild test/replay.ts --bundle --platform=node --format=esm --outfile=.test/replay.mjs --log-level=warning && node .test/replay.mjs",
-    "package": "node scripts/sync-version.mjs && node build.mjs --production && node test/smoke.cjs && vsce package --no-dependencies --allow-missing-repository --ignoreFile .vscodeignore.generated -o mathpanel.vsix",
+    "package": "node scripts/sync-version.mjs && node build.mjs --production && node test/smoke.cjs && vsce package --no-dependencies --ignoreFile .vscodeignore.generated -o mathpanel.vsix",
     "test-md": "esbuild test/markdown.ts --bundle --platform=node --format=esm --outfile=.test/markdown.mjs --log-level=warning && node .test/markdown.mjs",
     "e2e": "esbuild test/e2e.ts --bundle --platform=node --format=esm --outfile=.test/e2e.mjs --log-level=warning --alias:vscode=./test/mock-vscode.ts --external:@anthropic-ai/claude-agent-sdk && node .test/e2e.mjs",
     "harness": "esbuild test/harness.ts --bundle --platform=node --format=esm --outfile=.test/harness.mjs --log-level=warning --external:@anthropic-ai/claude-agent-sdk && node .test/harness.mjs",
@@ -336,5 +336,9 @@
         "claudePanel.remoteControl"
       ]
     }
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/David-Rab/math_code_extension"
   }
 }
