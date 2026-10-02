@@ -31,7 +31,7 @@ and adds a clean conversation view, a tab per subagent, and rendered math.
   collapses to one line (hidden / summary / detailed).
 - **Subagent tabs:** a tab per subagent with its task, replies and live status;
   a warning bar when a background tab needs you. Ordinary shell commands get no
-  tab; one that runs in the background gets a tab so it can be stopped.
+  tab; one that runs in the background has a tab while it runs, so it can be stopped.
   **Agent map** (⌬, Ctrl+Shift+M): a tree of all agents with their kind, model,
   context size, status, running time, actions and what each is doing now; the
   main agent also shows its effort, permission mode and context %.

@@ -2,7 +2,7 @@
   "name": "mathpanel",
   "displayName": "MathPanel (unofficial)",
   "description": "Unofficial conversation-first panel for Claude Code: subagent tabs, LaTeX rendering, status bar. Not affiliated with Anthropic.",
-  "version": "0.2.287",
+  "version": "0.3.287",
   "publisher": "david-local",
   "private": true,
   "license": "MIT",

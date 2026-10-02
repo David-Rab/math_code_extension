@@ -157,7 +157,7 @@ function App() {
         return;
       }
       if (!e.altKey || (e.key !== '[' && e.key !== ']' && !/^[1-9]$/.test(e.key))) return;
-      const ids = state.threads.map((t) => t.id);
+      const ids = shownThreads(state.threads, state.active).map((t) => t.id);
       let i = ids.indexOf(state.active);
       if (e.key === '[') i = Math.max(0, i - 1);
       else if (e.key === ']') i = Math.min(ids.length - 1, i + 1);
@@ -171,12 +171,13 @@ function App() {
 
   const s = state;
   const thread = s.threads.find((t) => t.id === s.active) ?? s.threads[0];
+  const threads = shownThreads(s.threads, s.active);
   if (!thread) return <div class="empty">Starting…</div>;
   return (
     <div class="app">
-      <Tabs threads={s.threads} active={thread.id} unread={s.unread} items={s.items} />
+      <Tabs threads={threads} active={thread.id} unread={s.unread} items={s.items} />
       <ThreadView key={thread.id} thread={thread} items={s.items[thread.id] ?? []} draft={s.drafts[thread.id]} config={s.config} />
-      {s.showMap && <AgentMap threads={s.threads} items={s.items} active={thread.id} status={s.status} />}
+      {s.showMap && <AgentMap threads={threads} items={s.items} active={thread.id} status={s.status} />}
       {s.showReport && <ReportForm />}
       <Attention active={thread.id} />
       <Progress todos={s.todos[thread.id] ?? []} threadId={thread.id} />
@@ -261,6 +262,11 @@ function shortModel(id?: string) {
 /** A background shell command or MCP call: it has a tab so it can be stopped, but it is not an agent. */
 function isCommand(t: ThreadMeta) {
   return !!t.agentType?.startsWith('background ');
+}
+
+/** The tabs and map rows to show: a background command only while it runs (or while you are looking at its tab). */
+function shownThreads(threads: ThreadMeta[], active: string): ThreadMeta[] {
+  return threads.filter((t) => !isCommand(t) || t.status === 'running' || t.id === active);
 }
 
 /** What kind of agent a map row is and how it stands: type, model, effort, mode, context, status, time, actions. */
