@@ -4,6 +4,7 @@ export const settings: Record<string, unknown> = {};
 
 export const workspace = {
   isTrusted: true,
+  workspaceFolders: undefined as { uri: { fsPath: string } }[] | undefined,
   onDidGrantWorkspaceTrust: () => ({ dispose() {} }),
   getConfiguration: () => ({
     get: <T>(key: string, def: T): T => (key in settings ? (settings[key] as T) : def),
@@ -21,22 +22,30 @@ export const window = {
   showTextDocument: async () => undefined,
   showErrorMessage: async (text: string) => void shown.push({ level: 'error', text }),
   showInformationMessage: async (text: string) => void shown.push({ level: 'info', text }),
-  // Modal confirmations: answer with the first offered button.
+  // Modal confirmations: answer with the first offered button, unless the test declines.
   showWarningMessage: async (text: string, ...rest: any[]) => {
     shown.push({ level: 'warn', text });
-    return rest.find((r) => typeof r === 'string');
+    return answers.confirm ? rest.find((r) => typeof r === 'string') : undefined;
   },
   onDidCloseTerminal: () => ({ dispose() {} }),
   showInputBox: async () => (settings.__inputBox as string | undefined),
 };
 
-export const commands = { executeCommand: async () => undefined };
+/** How modal confirmations are answered. */
+export const answers = { confirm: true };
+/** Every VS Code command the code under test ran, and every link it sent to the browser. */
+export const executed: any[][] = [];
+export const external: string[] = [];
+export const commands = { executeCommand: async (...a: any[]) => void executed.push(a) };
 export const version = 'test';
-export const env = { openExternal: async () => true };
+export const env = { openExternal: async (u: { toString(): string }) => (external.push(u.toString()), true) };
 export const ConfigurationTarget = { Global: 1 };
 export const ViewColumn = { One: 1, Beside: -2 };
 export class Range {
-  constructor(..._a: number[]) {}
+  readonly at: number[];
+  constructor(...a: number[]) {
+    this.at = a;
+  }
 }
 export class RelativePattern {
   constructor(..._a: unknown[]) {}

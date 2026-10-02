@@ -15,7 +15,7 @@ fs.mkdirSync(path.join(dir, '.claude'), { recursive: true });
 fs.writeFileSync(path.join(dir, '.claude', 'settings.json'), JSON.stringify({ permissions: { allow: ['Bash(echo trust-check:*)'] } }));
 setBundledExecutable(path.resolve('node_modules/@anthropic-ai/claude-agent-sdk-win32-x64/claude.exe'));
 Object.assign(settings, { initialModel: 'haiku', initialPermissionMode: 'default', remoteControl: 'off', prewarm: false, sound: 'off', notification: 'off' });
-const host: SessionHost = { openSession() {}, sessionsChanged() {} };
+const host: SessionHost = { openSession() {}, sessionsChanged() {}, async saveReport() {} };
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 let failed = 0;
 const check = (name: string, ok: boolean, detail?: unknown) => {

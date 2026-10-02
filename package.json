@@ -2,7 +2,7 @@
   "name": "mathpanel",
   "displayName": "MathPanel (unofficial)",
   "description": "Unofficial conversation-first panel for Claude Code: subagent tabs, LaTeX rendering, status bar. Not affiliated with Anthropic.",
-  "version": "0.1.283",
+  "version": "0.2.283",
   "publisher": "david-local",
   "private": true,
   "license": "MIT",
@@ -22,6 +22,12 @@
         "title": "New Session",
         "category": "MathPanel",
         "icon": "$(add)"
+      },
+      {
+        "command": "claudePanel.newSessionTab",
+        "title": "New MathPanel Session",
+        "category": "MathPanel",
+        "icon": "resources/icon.svg"
       },
       {
         "command": "claudePanel.openSession",
@@ -143,7 +149,17 @@
           "group": "9_delete@1"
         }
       ],
+      "commandPalette": [
+        {
+          "command": "claudePanel.newSessionTab",
+          "when": "false"
+        }
+      ],
       "editor/title": [
+        {
+          "command": "claudePanel.newSessionTab",
+          "group": "navigation@90"
+        },
         {
           "command": "claudePanel.agentMap",
           "when": "activeWebviewPanelId == claudePanel.chat",
@@ -202,7 +218,7 @@
         "claudePanel.initialModel": {
           "type": "string",
           "default": "",
-          "description": "Model for new sessions (e.g. opus, sonnet, claude-fable-5-1). Empty: your Claude Code default.",
+          "description": "Always start new sessions with this model (e.g. opus, sonnet, claude-fable-5-1). Empty: the model you last picked in a panel, else your Claude Code default.",
           "scope": "application"
         },
         "claudePanel.initialPermissionMode": {
@@ -215,7 +231,7 @@
             "auto"
           ],
           "default": "",
-          "description": "Permission mode for new sessions. Empty: your Claude Code default.",
+          "description": "Always start new sessions in this permission mode. Empty: the mode you last picked in a panel, else your Claude Code default.",
           "scope": "application"
         },
         "claudePanel.remoteControl": {
@@ -304,7 +320,8 @@
     }
   },
   "scripts": {
-    "test": "npm run -s replay && npm run -s unit && npm run -s test-md",
+    "test": "npm run -s replay && npm run -s unit && npm run -s host && npm run -s test-md",
+    "host": "esbuild test/host.ts --bundle --platform=node --format=esm --outfile=.test/host.mjs --log-level=warning --alias:vscode=./test/mock-vscode.ts --external:@anthropic-ai/claude-agent-sdk && node .test/host.mjs",
     "build": "node build.mjs",
     "watch": "node build.mjs --watch",
     "typecheck": "tsc --noEmit",

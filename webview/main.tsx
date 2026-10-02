@@ -16,6 +16,7 @@ interface State extends Snapshot {
   active: string;
   unread: Record<string, boolean>;
   showMap: boolean;
+  showReport: boolean;
 }
 
 let state: State = {
@@ -28,6 +29,7 @@ let state: State = {
   active: 'main',
   unread: {},
   showMap: false,
+  showReport: false,
 };
 let setVersion: (n: number) => void = () => {};
 let version = 0;
@@ -72,7 +74,7 @@ function apply(s: State, m: HostToView): State {
     case 'snapshot': {
       const saved = vscode.getState() ?? {};
       const active = m.snapshot.threads.some((t) => t.id === saved.active) ? saved.active : 'main';
-      return { ...m.snapshot, todos: m.snapshot.todos ?? {}, active, unread: {}, showMap: s.showMap };
+      return { ...m.snapshot, todos: m.snapshot.todos ?? {}, active, unread: {}, showMap: s.showMap, showReport: s.showReport };
     }
     case 'thread': {
       const i = s.threads.findIndex((t) => t.id === m.thread.id);
@@ -103,6 +105,8 @@ function apply(s: State, m: HostToView): State {
       return s.threads.some((t) => t.id === m.threadId) ? { ...s, active: m.threadId, unread: { ...s.unread, [m.threadId]: false } } : s;
     case 'showAgentMap':
       return { ...s, showMap: true };
+    case 'showReport':
+      return { ...s, showReport: true };
     case 'status':
       return { ...s, status: { ...s.status, ...m.status } };
     case 'config':
@@ -114,6 +118,11 @@ function apply(s: State, m: HostToView): State {
 
 function setShowMap(on: boolean) {
   state = { ...state, showMap: on };
+  setVersion(++version);
+}
+
+function setShowReport(on: boolean) {
+  state = { ...state, showReport: on };
   setVersion(++version);
 }
 
@@ -167,7 +176,8 @@ function App() {
     <div class="app">
       <Tabs threads={s.threads} active={thread.id} unread={s.unread} items={s.items} />
       <ThreadView key={thread.id} thread={thread} items={s.items[thread.id] ?? []} draft={s.drafts[thread.id]} config={s.config} />
-      {s.showMap && <AgentMap threads={s.threads} items={s.items} active={thread.id} />}
+      {s.showMap && <AgentMap threads={s.threads} items={s.items} active={thread.id} status={s.status} />}
+      {s.showReport && <ReportForm />}
       <Attention active={thread.id} />
       <Progress todos={s.todos[thread.id] ?? []} threadId={thread.id} />
       <Composer status={s.status} thread={thread} config={s.config} />
@@ -191,7 +201,7 @@ function Tabs({ threads, active, unread, items }: { threads: ThreadMeta[]; activ
         <button
           key={t.id}
           class={`tab ${t.id === active ? 'active' : ''} ${t.id === 'main' ? 'main' : ''}`}
-          title={[t.title, t.agentType, t.model, t.background ? 'background' : ''].filter(Boolean).join(' · ') + (i < 9 ? `  (Alt+${i + 1})` : '')}
+          title={[t.title, t.agentType, shortModel(t.model), t.background ? 'background' : ''].filter(Boolean).join(' · ') + (i < 9 ? `  (Alt+${i + 1})` : '')}
           onClick={() => setActive(t.id)}
           style={t.id === 'main' ? undefined : { '--agent-hue': String(hue(t.id)) }}
         >
@@ -243,7 +253,30 @@ function elapsed(t: ThreadMeta, now: number): string {
   return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
 }
 
-function AgentMap({ threads, items, active }: { threads: ThreadMeta[]; items: Record<string, Item[]>; active: string }) {
+/** claude-haiku-4-5-20251001 reads as haiku-4-5. */
+function shortModel(id?: string) {
+  return id ? id.replace(/^claude-/, '').replace(/-\d{8}$/, '') : '';
+}
+
+/** A background shell command or MCP call: it has a tab so it can be stopped, but it is not an agent. */
+function isCommand(t: ThreadMeta) {
+  return !!t.agentType?.startsWith('background ');
+}
+
+/** What kind of agent a map row is and how it stands: type, model, effort, mode, context, status, time, actions. */
+function mapMeta(t: ThreadMeta, status: Status, now: number, actions: number): string {
+  const count = `${actions} action${actions === 1 ? '' : 's'}`;
+  if (t.id !== 'main') {
+    const context = t.contextTokens ? `context ${fmtTokens(t.contextTokens)}` : '';
+    const background = t.background && !isCommand(t) ? 'background' : '';
+    return [t.agentType, shortModel(t.model), background, statusWord(t.status), elapsed(t, now), context, isCommand(t) ? '' : count].filter(Boolean).join(' · ');
+  }
+  const mode = MODES.find(([v]) => v === status.permissionMode)?.[1] ?? status.permissionMode;
+  const context = status.contextPercent === undefined ? '' : `context ${status.contextPercent}%${status.contextTokens ? ` (${fmtTokens(status.contextTokens)} of ${fmtTokens(status.contextMax)})` : ''}`;
+  return [shortModel(status.model), status.effort ? `effort ${status.effort}` : '', mode, context, statusWord(t.status), count].filter(Boolean).join(' · ');
+}
+
+function AgentMap({ threads, items, active, status }: { threads: ThreadMeta[]; items: Record<string, Item[]>; active: string; status: Status }) {
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 1000);
@@ -270,9 +303,10 @@ function AgentMap({ threads, items, active }: { threads: ThreadMeta[]; items: Re
               {t.id === 'main' ? 'Main agent' : t.title}
               {waiting && <span class="badge-attn">needs you</span>}
             </div>
-            <div class="muted map-meta">
-              {[t.agentType, t.model, t.background ? 'background' : '', statusWord(t.status), t.id === 'main' ? '' : elapsed(t, now), `${actions(t.id)} actions`].filter(Boolean).join(' · ')}
+            <div class="muted map-meta" title={mapMeta(t, status, now, actions(t.id))}>
+              {mapMeta(t, status, now, actions(t.id))}
             </div>
+            {t.status === 'running' && t.activity && <div class="muted map-meta">▸ {t.activity}</div>}
           </div>
           {t.id !== 'main' && t.status === 'running' && t.taskId && (
             <button
@@ -291,13 +325,15 @@ function AgentMap({ threads, items, active }: { threads: ThreadMeta[]; items: Re
     );
   };
   const main = threads.find((t) => t.id === 'main');
-  const orphans = threads.filter((t) => t.id !== 'main' && t.parentId && !threads.some((p) => p.id === t.parentId));
+  const commands = threads.filter(isCommand).length;
+  const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
+  const orphans =threads.filter((t) => t.id !== 'main' && t.parentId && !threads.some((p) => p.id === t.parentId));
   return (
     <div class="map-overlay" onClick={(e) => e.target === e.currentTarget && setShowMap(false)}>
       <div class="map-card">
         <div class="map-header">
           <strong>Agent map</strong>
-          <span class="muted">{threads.length - 1} subagent{threads.length === 2 ? '' : 's'}</span>
+          <span class="muted">{plural(threads.filter((t) => t.id !== 'main' && !isCommand(t)).length, 'subagent') + (commands ? ` · ${plural(commands, 'background command')}` : '')}</span>
           <span class="grow" />
           <button class="link" onClick={() => setShowMap(false)}>
             Close (Esc)
@@ -448,7 +484,11 @@ function ThreadView({ thread, items, draft, config }: { thread: ThreadMeta; item
         <ItemView key={it.id} item={it} config={config} />
       ))}
       {draft !== undefined && <Draft text={draft} math={config.renderMath} />}
-      {thread.status === 'running' && draft === undefined && <div class="working">{thread.id === 'main' ? 'Working…' : 'Subagent working…'}</div>}
+      {thread.status === 'running' && draft === undefined && (
+        <div class="working">
+          {thread.activity ? `${thread.activity}…` : thread.id === 'main' ? 'Working…' : isCommand(thread) ? 'Running in the background…' : 'Subagent working…'}
+        </div>
+      )}
       {showJump && (
         <button class="jump" onClick={() => ((stick.current = true), (ref.current!.scrollTop = ref.current!.scrollHeight), setShowJump(false))}>
           ↓ Latest
@@ -493,12 +533,12 @@ function SubagentHeader({ thread }: { thread: ThreadMeta }) {
         <strong>{thread.title}</strong>
         <span class="muted">
           {' '}
-          · {[thread.agentType, thread.model, thread.background ? 'background' : ''].filter(Boolean).join(' · ')} · {statusWord(thread.status)}
+          · {[thread.agentType, shortModel(thread.model), thread.background ? 'background' : '', statusWord(thread.status), thread.contextTokens ? `context ${fmtTokens(thread.contextTokens)}` : ''].filter(Boolean).join(' · ')}
         </span>
       </div>
       {thread.status === 'running' && thread.taskId && (
         <button class="secondary small" onClick={() => send({ t: 'stopTask', taskId: thread.taskId! })}>
-          Stop this subagent
+          {isCommand(thread) ? 'Stop this command' : 'Stop this subagent'}
         </button>
       )}
     </div>
@@ -872,8 +912,7 @@ function Composer({ status, thread, config }: { status: Status; thread: ThreadMe
   const [menu, setMenu] = useState<{ kind: '/' | '@'; items: string[]; sel: number; start: number } | null>(null);
   const history = useRef<string[]>([]);
   const histPos = useRef(-1);
-  const [images, setImages] = useState<ImageAttachment[]>([]);
-  const [imageError, setImageError] = useState('');
+  const { images, setImages, imageError, onPaste, onDrop } = useAttachments();
 
   useEffect(() => {
     const onFiles = (_q: string, files: string[]) =>
@@ -890,31 +929,6 @@ function Composer({ status, thread, config }: { status: Status; thread: ThreadMe
     };
   }, []);
 
-  const addFiles = async (files: File[]) => {
-    const imgs = files.filter((f) => /^image\/(png|jpeg|gif|webp)$/.test(f.type));
-    if (files.length && !imgs.length) setImageError('Only PNG, JPEG, GIF and WebP images can be attached.');
-    for (const f of imgs) {
-      try {
-        const att = await toAttachment(f);
-        setImages((cur) => (cur.length >= 10 ? cur : [...cur, att]));
-        setImageError('');
-      } catch (e) {
-        setImageError(String((e as Error).message ?? e));
-      }
-    }
-  };
-  const onPaste = (e: ClipboardEvent) => {
-    const files = [...(e.clipboardData?.items ?? [])].filter((i) => i.kind === 'file').map((i) => i.getAsFile()!).filter(Boolean);
-    if (!files.length) return;
-    e.preventDefault();
-    void addFiles(files);
-  };
-  const onDrop = (e: DragEvent) => {
-    const files = [...(e.dataTransfer?.files ?? [])];
-    if (!files.length) return;
-    e.preventDefault();
-    void addFiles(files);
-  };
   useLayoutEffect(() => {
     const el = ref.current!;
     el.style.height = 'auto';
@@ -1012,19 +1026,7 @@ function Composer({ status, thread, config }: { status: Status; thread: ThreadMe
           ))}
         </div>
       )}
-      {(images.length > 0 || imageError) && (
-        <div class="attachments">
-          {images.map((im, i) => (
-            <span key={i} class="attachment">
-              <img src={`data:${im.mediaType};base64,${im.data}`} />
-              <button class="remove" title="Remove" onClick={() => setImages(images.filter((_, j) => j !== i))}>
-                ×
-              </button>
-            </span>
-          ))}
-          {imageError && <span class="err">{imageError}</span>}
-        </div>
-      )}
+      <Attachments class="attachments" images={images} setImages={setImages} error={imageError} />
       <textarea
         ref={ref}
         rows={1}
@@ -1044,6 +1046,114 @@ function Composer({ status, thread, config }: { status: Status; thread: ThreadMe
       <button title={config.enterToSend ? 'Send (Enter)' : 'Send (Ctrl+Enter)'} disabled={!text.trim() && !images.length} onClick={submit}>
         Send
       </button>
+    </div>
+  );
+}
+
+/** Images pasted or dropped into a text box, read and scaled for sending. */
+function useAttachments() {
+  const [images, setImages] = useState<ImageAttachment[]>([]);
+  const [imageError, setImageError] = useState('');
+  const addFiles = async (files: File[]) => {
+    const imgs = files.filter((f) => /^image\/(png|jpeg|gif|webp)$/.test(f.type));
+    if (files.length && !imgs.length) setImageError('Only PNG, JPEG, GIF and WebP images can be attached.');
+    for (const f of imgs) {
+      try {
+        const att = await toAttachment(f);
+        setImages((cur) => (cur.length >= 10 ? cur : [...cur, att]));
+        setImageError('');
+      } catch (e) {
+        setImageError(String((e as Error).message ?? e));
+      }
+    }
+  };
+  const onPaste = (e: ClipboardEvent) => {
+    const files = [...(e.clipboardData?.items ?? [])].filter((i) => i.kind === 'file').map((i) => i.getAsFile()!).filter(Boolean);
+    if (!files.length) return;
+    e.preventDefault();
+    void addFiles(files);
+  };
+  const onDrop = (e: DragEvent) => {
+    const files = [...(e.dataTransfer?.files ?? [])];
+    if (!files.length) return;
+    e.preventDefault();
+    void addFiles(files);
+  };
+  return { images, setImages, imageError, onPaste, onDrop };
+}
+
+function Attachments(p: { class: string; images: ImageAttachment[]; setImages: (i: ImageAttachment[]) => void; error: string }) {
+  if (!p.images.length && !p.error) return null;
+  return (
+    <div class={p.class}>
+      {p.images.map((im, i) => (
+        <span key={i} class="attachment">
+          <img src={`data:${im.mediaType};base64,${im.data}`} />
+          <button class="remove" title="Remove" onClick={() => p.setImages(p.images.filter((_, j) => j !== i))}>
+            ×
+          </button>
+        </span>
+      ))}
+      {p.error && <span class="err">{p.error}</span>}
+    </div>
+  );
+}
+
+// --- report a problem ------------------------------------------------------
+
+function ReportForm() {
+  const ref = useRef<HTMLTextAreaElement>(null);
+  // Kept while the panel lives, so closing the form by accident loses nothing.
+  const [text, setText] = useState<string>(() => vscode.getState()?.report ?? '');
+  const { images, setImages, imageError, onPaste, onDrop } = useAttachments();
+  const update = (v: string) => {
+    setText(v);
+    vscode.setState({ ...(vscode.getState() ?? {}), report: v });
+  };
+  useEffect(() => {
+    ref.current?.focus();
+    const esc = (e: KeyboardEvent) => e.key === 'Escape' && setShowReport(false);
+    window.addEventListener('keydown', esc);
+    return () => window.removeEventListener('keydown', esc);
+  }, []);
+  const empty = !text.trim() && !images.length;
+  const save = () => {
+    if (empty) return;
+    send({ t: 'report', text, images: images.length ? images : undefined });
+    update('');
+    setShowReport(false);
+  };
+  return (
+    <div class="map-overlay">
+      <div class="map-card report-card">
+        <div class="map-header">
+          <strong>Report a problem with MathPanel</strong>
+        </div>
+        <div class="muted">
+          Saved on this machine, in the bug-reports folder, for Claude to fix; nothing is sent anywhere. This session's state, its warnings and unsupported
+          events, and the panel log are added for you.
+        </div>
+        <textarea
+          ref={ref}
+          rows={8}
+          value={text}
+          placeholder="What went wrong, and what did you expect? Write as much as you like; paste error text, and paste or drop screenshots."
+          onInput={(e) => update((e.target as HTMLTextAreaElement).value)}
+          onKeyDown={(e) => e.key === 'Enter' && (e.ctrlKey || e.metaKey) && (save(), e.preventDefault())}
+          onPaste={onPaste}
+          onDrop={onDrop}
+          onDragOver={(e) => e.preventDefault()}
+        />
+        <Attachments class="report-attachments" images={images} setImages={setImages} error={imageError} />
+        <div class="buttons">
+          <button disabled={empty} title="Save (Ctrl+Enter)" onClick={save}>
+            Save report
+          </button>
+          <button class="secondary" title="Close (Esc); what you wrote is kept" onClick={() => setShowReport(false)}>
+            Cancel
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -1094,6 +1204,7 @@ const MODES: [string, string][] = [
 
 function fmtTokens(n?: number) {
   if (n === undefined) return '?';
+  if (n >= 1_000_000) return `${+(n / 1_000_000).toFixed(1)}M`;
   return n >= 1000 ? `${Math.round(n / 1000)}k` : String(n);
 }
 
@@ -1176,7 +1287,7 @@ function StatusBar({ status, config }: { status: Status; config: ViewConfig }) {
         <option value="detailed">tools: detailed</option>
       </select>
       <span class="grow" />
-      <button class="toggle" title="Report a problem with this panel" onClick={() => send({ t: 'reportProblem' })}>
+      <button class="toggle" title="Report a problem with this panel" onClick={() => setShowReport(true)}>
         ⚑
       </button>
       {status.update ? (

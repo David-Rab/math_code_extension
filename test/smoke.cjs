@@ -35,7 +35,8 @@ Module._load = function (request, ...rest) {
   return request === 'vscode' ? vscode : load.call(this, request, ...rest);
 };
 const ext = require(path.resolve('dist/extension.cjs'));
-ext.activate({ subscriptions: [], extensionUri: { fsPath: process.cwd() }, extensionPath: process.cwd() });
+const globalState = { get: () => undefined, update: async () => {}, keys: () => [] };
+ext.activate({ subscriptions: [], extensionUri: { fsPath: process.cwd() }, extensionPath: process.cwd(), globalState });
 console.log('activated OK; commands:', registered.join(', '));
 ext.deactivate();
 process.exit(0);

@@ -9,6 +9,7 @@ import { settings, shown, FakePanel } from './mock-vscode';
 import { ChatSession, type SessionHost } from '../src/session';
 import { WarmPool } from '../src/warm';
 import { setBundledExecutable } from '../src/config';
+import { initPrefs, lastUsed, rememberLastUsed } from '../src/prefs';
 
 const work = process.argv[2];
 if (!work) throw new Error('pass a scratch work directory');
@@ -16,9 +17,13 @@ fs.mkdirSync(work, { recursive: true });
 setBundledExecutable(path.resolve('node_modules/@anthropic-ai/claude-agent-sdk-win32-x64/claude.exe'));
 Object.assign(settings, { initialModel: 'haiku', initialPermissionMode: 'default', remoteControl: 'off', prewarm: false, toolActivity: 'summary', sound: 'off', notification: 'needsYouAndDone' });
 
+// The extension's own storage, where the last-used model, effort and mode are remembered.
+const stored: Record<string, unknown> = {};
+initPrefs({ get: (k: string) => stored[k], update: async (k: string, v: unknown) => void (stored[k] = v), keys: () => Object.keys(stored) } as any);
+
 // What the session asks the extension to open (forks).
 const opened: { id?: string; prefill?: string }[] = [];
-const host: SessionHost = { openSession: (id, _cwd, prefill) => void opened.push({ id, prefill }), sessionsChanged() {} };
+const host: SessionHost = { openSession: (id, _cwd, prefill) => void opened.push({ id, prefill }), sessionsChanged() {}, async saveReport() {} };
 
 /** A solid-colour PNG, to test sending images. */
 function png(w: number, h: number, rgb: [number, number, number]): string {
@@ -102,11 +107,12 @@ const s = new ChatSession(panel as any, work, warm, host);
 await s.start();
 panel.fromView({ t: 'ready' });
 
-const PROMPT = `First use the TodoWrite tool to make a checklist of the four steps below, and keep it updated as you go. Then do these steps in order:
+const PROMPT = `First use the TodoWrite tool to make a checklist of the five steps below, and keep it updated as you go. Then do these steps in order:
 1) Create a file named e2e.txt containing the word hi, using the Write tool.
-2) Use the AskUserQuestion tool to ask me which color I prefer, with the options Red and Blue.
-3) Use the Agent tool to launch one general-purpose subagent with description "e2e-sub" and prompt "Reply with exactly: the sub says $x^2$. Use no tools." Do not run it in the background; wait for its result.
-4) Finally reply with one sentence stating my color and what the subagent said.`;
+2) Use the Bash tool to run exactly this command, in the foreground: sleep 4 && echo slept
+3) Use the AskUserQuestion tool to ask me which color I prefer, with the options Red and Blue.
+4) Use the Agent tool to launch one general-purpose subagent with description "e2e-sub" and prompt "Reply with exactly: the sub says $x^2$. Use no tools." Do not run it in the background; wait for its result.
+5) Finally reply with one sentence stating my color and what the subagent said.`;
 panel.fromView({ t: 'send', text: PROMPT });
 check('turn finished', await waitIdle(s, 240000), `still busy after 240s`);
 console.log(`      (${secs()})`);
@@ -118,7 +124,10 @@ if (sub) {
   check('subagent text streamed into its tab', texts(s, sub.id).some((t) => /sub says/i.test(t)), JSON.stringify(items(s, sub.id)).slice(0, 300));
   check('subagent marked finished', sub.status === 'done', sub.status);
   check('main thread links to subagent', items(s).some((i: any) => i.kind === 'agent' && i.threadId === sub.id));
+  check('agent map: subagent kind, model and context size known', sub.agentType === 'general-purpose' && /haiku/.test(sub.model ?? '') && (sub.contextTokens ?? 0) > 0, JSON.stringify(sub));
 }
+check('the shell command ran', items(s).some((i: any) => i.kind === 'tools' && i.tools.some((t: any) => t.name === 'Bash' && t.status === 'done')), JSON.stringify(items(s).filter((i: any) => i.kind === 'tools')));
+check('only the subagent got a tab (shell commands do not)', s.transcript.threads.size === 2, JSON.stringify([...s.transcript.threads.values()].map((t) => t.title)));
 const perm: any = items(s).find((i: any) => i.kind === 'permission');
 check('permission prompt shown and allowed', perm?.state === 'allowed', JSON.stringify(perm));
 check('file actually written', fs.existsSync(path.join(work, 'e2e.txt')));
@@ -153,6 +162,10 @@ check('switch effort', s.status.effort === 'low', String(s.status.effort));
 panel.fromView({ t: 'setMode', value: 'acceptEdits' });
 await sleep(1000);
 check('switch permission mode', s.status.permissionMode === 'acceptEdits', s.status.permissionMode);
+check('your picks are remembered for new tabs', JSON.stringify(lastUsed()) === '{"model":"sonnet","effort":"low","permissionMode":"acceptEdits"}', JSON.stringify(lastUsed()));
+panel.fromView({ t: 'setMode', value: 'bypassPermissions' });
+await sleep(500);
+check('an unsafe permission mode is refused and not remembered', s.status.permissionMode === 'acceptEdits' && lastUsed().permissionMode === 'acceptEdits', s.status.permissionMode + ' / ' + lastUsed().permissionMode);
 panel.fromView({ t: 'setModel', value: 'haiku' });
 panel.fromView({ t: 'setMode', value: 'default' });
 await sleep(2000);
@@ -226,7 +239,9 @@ check('resumed session remembers', texts(s2).some((t) => /resumed/i.test(t)) && 
 panel2.dispose();
 
 // ---------------------------------------------------------------- 5. pre-warm
-settings.prewarm = true;
+// A new tab starts with the model, effort and mode picked last (no "initial" settings pinned).
+Object.assign(settings, { prewarm: true, initialModel: '', initialPermissionMode: '' });
+rememberLastUsed({ model: 'sonnet', effort: 'low', permissionMode: 'acceptEdits' });
 warm.fill(work);
 const tw = Date.now();
 while (!warm.isReady(work) && Date.now() - tw < 90000) await sleep(250);
@@ -244,6 +259,8 @@ panel3.watch((m) => {
 panel3.fromView({ t: 'send', text: 'Reply with only the word: warm' });
 check('warm session answers', await waitIdle(s3, 120000));
 console.log(`      first token ${(firstToken / 1000).toFixed(1)}s after send (warm)`);
+check('the new tab used the spare process', firstToken > 0 && !warm.isReady(work));
+check('the new tab started with the model, effort and mode picked last', /sonnet/.test(s3.status.model ?? '') && s3.status.modelChoice === 'sonnet' && s3.status.effort === 'low' && s3.status.permissionMode === 'acceptEdits', `${s3.status.model} / ${s3.status.modelChoice} / ${s3.status.effort} / ${s3.status.permissionMode}`);
 panel3.dispose();
 warm.dispose();
 

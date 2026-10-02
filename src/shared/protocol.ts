@@ -7,13 +7,15 @@ export interface ThreadMeta {
   id: string; // 'main' or the tool_use id of the Agent call that started it
   title: string;
   agentType?: string;
-  model?: string;
+  model?: string; // as requested in the Agent call, then the model id its replies report
   parentId?: string; // thread that launched it
   status: ThreadStatus;
   background?: boolean;
   taskId?: string; // for stopping a background subagent
   startedAt?: number;
   endedAt?: number;
+  contextTokens?: number; // subagent: size of its conversation at its latest reply
+  activity?: string; // one line on what it is doing right now
 }
 
 export interface Todo {
@@ -123,7 +125,8 @@ export type HostToView =
   | { t: 'todos'; threadId: string; todos: Todo[] }
   | { t: 'focusThread'; threadId: string }
   | { t: 'prefill'; text: string }
-  | { t: 'showAgentMap' };
+  | { t: 'showAgentMap' }
+  | { t: 'showReport' };
 
 export type ViewToHost =
   | { t: 'ready' }
@@ -146,4 +149,4 @@ export type ViewToHost =
   | { t: 'refreshStatus' }
   | { t: 'runUpdate' }
   | { t: 'log'; text: string }
-  | { t: 'reportProblem' };
+  | { t: 'report'; text: string; images?: ImageAttachment[] };

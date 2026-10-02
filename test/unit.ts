@@ -70,6 +70,70 @@ const toolResult = (id: string, content: any, extra: any = {}) => ({ type: 'user
   check('unknown events still surface', !!r.unknown && (t.items.get('main') ?? []).some((i) => i.kind === 'unknown'));
 }
 
+// --- events Claude Code sends that the SDK's types do not list yet
+{
+  const t = new Transcript();
+  t.setMainRunning(true);
+  const r = t.handle({ type: 'system', subtype: 'task_summary', detail: 'Reading the test files' });
+  check('task_summary is not "unsupported"', !r.unknown && !(t.items.get('main') ?? []).some((i) => i.kind === 'unknown'));
+  check('task_summary says what Claude is doing', t.threads.get('main')!.activity === 'Reading the test files', t.threads.get('main'));
+  t.handle({ type: 'system', subtype: 'task_summary', detail: null });
+  check('an empty task_summary clears it', t.threads.get('main')!.activity === undefined);
+  t.handle({ type: 'system', subtype: 'task_summary', detail: 'Reading files' });
+  t.setMainRunning(false);
+  check('the summary goes away when the turn ends', t.threads.get('main')!.activity === undefined);
+  const quiet = [{ type: 'system', subtype: 'session_metadata', metadata: {} }, { type: 'active_goal', value: null }, { type: 'autocompact_state', value: {} }].map((m) => t.handle(m));
+  check('session_metadata, active_goal, autocompact_state are not "unsupported"', quiet.every((x) => !x.unknown));
+}
+
+// --- only agents get a tab; a shell command gets one only while it runs in the background
+{
+  const t = new Transcript();
+  t.handle(asst([{ type: 'tool_use', id: 'b1', name: 'Bash', input: { command: 'npm test', description: 'Run the tests' } }]));
+  t.handle({ type: 'system', subtype: 'task_started', task_id: 'k1', tool_use_id: 'b1', description: 'Run the tests', task_type: 'local_bash', is_backgrounded: false });
+  check('a foreground shell command gets no tab', !t.threads.has('b1') && t.threads.size === 1, [...t.threads.keys()]);
+  t.handle({ type: 'system', subtype: 'task_updated', task_id: 'k1', patch: { status: 'completed' } });
+  t.handle({ type: 'system', subtype: 'task_notification', task_id: 'k1', tool_use_id: 'b1', status: 'completed' });
+  check('…also not when it finishes', t.threads.size === 1);
+
+  t.handle({ type: 'system', subtype: 'task_started', task_id: 'k2', tool_use_id: 'b2', description: 'Dev server', task_type: 'local_bash', is_backgrounded: true });
+  const bg = t.threads.get('b2');
+  check('a background shell command gets a tab that can be stopped', bg?.agentType === 'background command' && bg.taskId === 'k2' && bg.background === true, bg);
+
+  t.handle({ type: 'system', subtype: 'task_started', task_id: 'k3', tool_use_id: 'b3', description: 'Long build', task_type: 'local_bash', is_backgrounded: false });
+  t.handle({ type: 'system', subtype: 'task_updated', task_id: 'k3', patch: { is_backgrounded: true } });
+  check('a command moved to the background gets a tab then', t.threads.get('b3')?.status === 'running' && t.threads.get('b3')?.taskId === 'k3', t.threads.get('b3'));
+  t.handle({ type: 'system', subtype: 'task_updated', task_id: 'k3', patch: { status: 'killed' } });
+  check('…and its status follows the task', t.threads.get('b3')?.status === 'stopped');
+
+  t.handle({ type: 'system', subtype: 'task_started', task_id: 'k4', tool_use_id: 'h1', description: 'housekeeping', task_type: 'local_agent', skip_transcript: true });
+  check('housekeeping tasks get no tab', !t.threads.has('h1'));
+}
+
+// --- what the agent map shows about a subagent: kind, model, context, activity
+{
+  const t = new Transcript();
+  t.handle(asst([{ type: 'tool_use', id: 'ag', name: 'Agent', input: { description: 'helper', prompt: 'do it' } }]));
+  check('an Agent call without a type is the general-purpose agent', t.threads.get('ag')?.agentType === 'general-purpose', t.threads.get('ag'));
+  t.handle({ type: 'system', subtype: 'task_started', task_id: 'k', tool_use_id: 'ag', description: 'helper', subagent_type: 'Explore', task_type: 'local_agent' });
+  check('task_started names the agent type', t.threads.get('ag')?.agentType === 'Explore' && t.threads.get('ag')?.taskId === 'k', t.threads.get('ag'));
+  const usage = { input_tokens: 10, cache_read_input_tokens: 40_000, cache_creation_input_tokens: 5_000, output_tokens: 90 };
+  t.handle(asst([{ type: 'text', text: 'hi' }], { parent_tool_use_id: 'ag', message: { model: 'claude-haiku-4-5-20251001', usage, content: [{ type: 'text', text: 'hi' }] } }));
+  const th = t.threads.get('ag')!;
+  check("a subagent's replies give its model and context size", th.model === 'claude-haiku-4-5-20251001' && th.contextTokens === 45_100, th);
+  check('the main agent is not touched by subagent usage', t.threads.get('main')!.contextTokens === undefined && t.threads.get('main')!.model === undefined);
+  t.handle({ type: 'system', subtype: 'task_progress', task_id: 'k', tool_use_id: 'ag', description: 'helper', usage: { total_tokens: 1, tool_uses: 2, duration_ms: 3 }, last_tool_name: 'Grep' });
+  check('task_progress says what a subagent is doing', t.threads.get('ag')?.activity === 'Using Grep', t.threads.get('ag'));
+  t.handle({ type: 'system', subtype: 'task_notification', task_id: 'k', tool_use_id: 'ag', status: 'completed' });
+  check('…until it finishes', t.threads.get('ag')?.activity === undefined && t.threads.get('ag')?.status === 'done', t.threads.get('ag'));
+  let emitted = 0;
+  const quiet = new Transcript(() => emitted++);
+  quiet.handle(asst([{ type: 'tool_use', id: 'ag', name: 'Agent', input: { description: 'helper' } }]));
+  const before = emitted;
+  quiet.updateThread('ag', { title: 'helper', status: 'running' });
+  check('an update that changes nothing is not sent to the view', emitted === before, emitted - before);
+}
+
 // --- history: images, uuids and fork points
 {
   const t = new Transcript();

@@ -30,8 +30,11 @@ and adds a clean conversation view, a tab per subagent, and rendered math.
 - **Conversation first:** only your messages and Claude's replies; tool activity
   collapses to one line (hidden / summary / detailed).
 - **Subagent tabs:** a tab per subagent with its task, replies and live status;
-  a warning bar when a background tab needs you. **Agent map** (⌬, Ctrl+Shift+M):
-  a tree of all agents with status, model, running time and actions.
+  a warning bar when a background tab needs you. Ordinary shell commands get no
+  tab; one that runs in the background gets a tab so it can be stopped.
+  **Agent map** (⌬, Ctrl+Shift+M): a tree of all agents with their kind, model,
+  context size, status, running time, actions and what each is doing now; the
+  main agent also shows its effort, permission mode and context %.
 - **Math:** KaTeX for `$…$`, `$$…$$`, `\(…\)`, `\[…\]` and `align`-style
   environments; ∑ toggles to source. `\F \Q \C \E` built in, more via the
   `mathMacros` setting. Copy button keeps the LaTeX.
@@ -43,9 +46,12 @@ and adds a clean conversation view, a tab per subagent, and rendered math.
 - **Images:** paste or drop into the message box (scaled to 1568 px).
 - **Rewind:** on your messages (↶): rewind code, fork the conversation from
   there, or both. Checkpointing is on for every session.
-- **Sessions:** several panels at once; Sessions sidebar with rename, fork,
-  delete; open panels come back with the window; a reopened session starts
-  Claude Code only when you look at it.
+- **Sessions:** several panels at once, opened from the button on every editor's
+  title bar, the status bar or the Sessions sidebar (rename, fork, delete); open
+  panels come back with the window; a reopened session starts Claude Code only
+  when you look at it. A new tab starts with the model, effort and permission
+  mode you picked last (unless the `initialModel` / `initialPermissionMode`
+  settings pin them).
 - **Notifications:** sound and VS Code notification when Claude needs you (and
   when it finishes), only when you are not looking at that panel.
 - **Fast start:** one pre-warmed Claude Code per window.
@@ -63,7 +69,10 @@ without asking; it prompts much less than "Ask before edits".
 - The webview loads no remote content: images in replies render as links,
   Markdown raw HTML is off, KaTeX runs untrusted.
 - Links in replies: web links open in the browser; network paths and other URI
-  schemes are refused; files outside the project need confirmation.
+  schemes are refused; files and folders outside the project need confirmation.
+  A file opens in an editor (never run); a folder is shown in the Explorer.
+- The remembered permission mode for new tabs is kept in the extension's own
+  user-level storage and can only be one of the modes the panel offers.
 - No program is started by bare name from a workspace folder; system tools are
   started by full path.
 - Settings that choose the executable, permission mode or remote control are
@@ -82,7 +91,7 @@ Windows only for now (the build bundles the win32-x64 Claude Code binary).
 ```sh
 npm install
 npm run typecheck
-npm test                     # transcript replay, unit, Markdown/LaTeX
+npm test                     # transcript replay, unit, host (links, settings, reports), Markdown/LaTeX
 node test/smoke.cjs          # production bundle loads (after a build)
 npm run e2e -- <scratch dir> # live session (Haiku); auto-approves everything, use an empty scratch dir
 npm run trust-e2e -- <new scratch dir>  # live folder-trust flow
@@ -99,8 +108,10 @@ node test/cdp.mjs .test/harness/b.html .test/harness/b.png
 
 ## Bug reports
 
-⚑ in the panel saves a report to `bug-reports/` (git-ignored, stays on your
-machine).
+⚑ in the panel opens a form: write as much as you like, paste error text, paste
+or drop screenshots. The report is saved to `bug-reports/` (git-ignored, stays
+on your machine) with the session's state, its warnings, any unsupported events
+in full, and the panel log.
 
 ## Layout
 
@@ -112,8 +123,9 @@ machine).
 | `src/warm.ts` | the pre-warmed spare `claude.exe` |
 | `src/auth.ts`, `src/trust.ts` | sign-in and folder trust via Claude Code |
 | `src/notify.ts`, `src/report.ts`, `src/updates.ts` | notifications, problem reports, updates |
+| `src/links.ts`, `src/prefs.ts` | opening links from replies; the model, effort and mode remembered for new tabs |
 | `webview/` | the panel UI (Preact), Markdown + KaTeX renderer, styles |
-| `test/` | replay, unit, renderer, e2e, trust e2e, benchmark harness |
+| `test/` | replay, unit, host (fake VS Code), renderer, e2e, trust e2e, benchmark harness |
 
 ## License and third-party software
 

@@ -26,6 +26,8 @@ import { trustRoot, isTrusted, neverAsk, rememberNeverAsk } from './trust';
 import type { HostToView, ImageAttachment, Item, Status, ViewConfig, ViewToHost, Question } from './shared/protocol';
 import type { WarmPool } from './warm';
 import { readConfig, log, claudeExecutable } from './config';
+import { openLink } from './links';
+import { lastUsed, rememberLastUsed, type LastUsed } from './prefs';
 
 type Pending =
   | { kind: 'permission'; threadId: string; input: any; suggestions: PermissionUpdate[]; resolve: (r: PermissionResult) => void }
@@ -48,8 +50,25 @@ const ACTIVE_ELSEWHERE_MS = 5 * 60_000;
 /** Permission modes the panel will ever set. Never bypassPermissions. */
 const SAFE_MODES = new Set(['default', 'acceptEdits', 'plan', 'auto', 'dontAsk']);
 
-export function buildOptions(cwd: string, hooks: () => SessionHooks | undefined, extra: Partial<Options> = {}): Options {
+/**
+ * The model, effort and permission mode a process starts with. A tab's own
+ * picks come first (so a restart keeps them), then the "initial" settings,
+ * then what you last picked in any panel. Unset: Claude Code's default.
+ */
+export function launchSettings(picks: LastUsed = {}): LastUsed {
   const cfg = readConfig();
+  const last = lastUsed();
+  const model = picks.model ?? (cfg.initialModel || last.model);
+  const mode = picks.permissionMode ?? (SAFE_MODES.has(cfg.initialPermissionMode) ? cfg.initialPermissionMode : last.permissionMode);
+  return {
+    model: model && model !== 'default' ? model : undefined,
+    effort: picks.effort ?? last.effort,
+    permissionMode: mode && SAFE_MODES.has(mode) ? mode : undefined,
+  };
+}
+
+export function buildOptions(cwd: string, hooks: () => SessionHooks | undefined, extra: Partial<Options> = {}, picks: LastUsed = {}): Options {
+  const start = launchSettings(picks);
   const opts: Options = {
     cwd,
     includePartialMessages: true,
@@ -68,8 +87,9 @@ export function buildOptions(cwd: string, hooks: () => SessionHooks | undefined,
   };
   const exe = claudeExecutable();
   if (exe && fs.existsSync(exe)) opts.pathToClaudeCodeExecutable = exe;
-  if (cfg.initialModel && !opts.model) opts.model = cfg.initialModel;
-  if (SAFE_MODES.has(cfg.initialPermissionMode) && !opts.permissionMode) opts.permissionMode = cfg.initialPermissionMode as Options['permissionMode'];
+  if (start.model && !opts.model) opts.model = start.model;
+  if (start.effort && !opts.effort) opts.effort = start.effort as Options['effort'];
+  if (start.permissionMode && !opts.permissionMode) opts.permissionMode = start.permissionMode as Options['permissionMode'];
   return opts;
 }
 
@@ -106,6 +126,15 @@ function permissionLabel(u: PermissionUpdate): string {
 export interface SessionHost {
   openSession(sessionId: string | undefined, cwd: string, prefill?: string): void;
   sessionsChanged(): void;
+  saveReport(session: ChatSession, text: string, images: ImageAttachment[]): Promise<void>;
+}
+
+const IMAGE_TYPES = /^image\/(png|jpeg|gif|webp)$/;
+/** Images from the webview: only the supported types, bounded in size and number. */
+function validImages(images: ImageAttachment[] | undefined): ImageAttachment[] {
+  return (Array.isArray(images) ? images : [])
+    .filter((i) => typeof i?.mediaType === 'string' && IMAGE_TYPES.test(i.mediaType) && typeof i.data === 'string' && i.data.length < 7_000_000)
+    .slice(0, 10);
 }
 
 export class ChatSession {
@@ -125,6 +154,8 @@ export class ChatSession {
   private trustGranted?: string; // folder to attest on the next launch
   private trustRootDir?: string;
   private subs: vscode.Disposable[] = [];
+  /** What you picked in this tab; a restarted process starts with it again. */
+  private picks: LastUsed = {};
 
   constructor(
     readonly panel: vscode.WebviewPanel,
@@ -239,12 +270,14 @@ export class ChatSession {
     const input = this.inputStream();
     const trust = this.trustGranted;
     this.trustGranted = undefined;
-    const warm = this.resumeId || trust ? undefined : this.warm.take(this.cwd, this.hooks());
+    const warm = this.resumeId || trust ? undefined : this.warm.take(this.cwd, this.hooks(), this.picks);
     const extra: Partial<Options> = this.resumeId ? { resume: this.resumeId } : {};
     // Claude Code's launch-time attestation that you accepted a trust dialog for this folder;
     // Claude Code then records the trust itself. (Not in the SDK's published types yet.)
     if (trust) (extra as any).workspaceTrust = { accepted: true, directory: trust };
-    this.q = warm ? warm.query(input) : query({ prompt: input, options: buildOptions(this.cwd, this.hooks, extra) });
+    this.q = warm ? warm.query(input) : query({ prompt: input, options: buildOptions(this.cwd, this.hooks, extra, this.picks) });
+    // The model picker shows what the process was started with (checked against the model list once it loads).
+    this.status.modelChoice = launchSettings(this.picks).model ?? this.status.modelChoice;
     if (trust) {
       log(`[${this.sessionId ?? 'new'}] launching with trust attestation for ${trust}`);
       void this.verifyTrust(this.q!, trust);
@@ -478,10 +511,8 @@ export class ChatSession {
     if (s.applied?.model) this.status.model = s.applied.model;
     this.status.effort = s.applied?.effort ?? null;
     const match = this.status.models.find((m) => m.value === this.status.modelChoice);
-    if (!match) {
-      const byResolved = this.status.models.find((m: any) => m.value === s.applied?.model);
-      if (byResolved) this.status.modelChoice = byResolved.value;
-    }
+    // A choice the picker does not list (e.g. a remembered model this version no longer offers) shows as the model in use.
+    if (!match) this.status.modelChoice = this.status.models.find((m: any) => m.value === s.applied?.model)?.value;
   }
 
   private async refreshContext() {
@@ -655,16 +686,25 @@ export class ChatSession {
         return;
       }
       case 'setModel':
+        if (typeof m.value !== 'string' || !this.status.models.some((x) => x.value === m.value)) return;
         await this.q?.setModel(m.value);
         this.status.modelChoice = m.value;
+        this.picks.model = m.value;
+        rememberLastUsed({ model: m.value });
         await this.refreshSettings();
         this.pushStatus();
         void this.refreshContext();
         return;
       case 'setMode':
-        return this.setMode(m.value);
+        await this.setMode(m.value);
+        // Only a mode you picked yourself carries over to new tabs (not one a plan approval switched to).
+        if (this.status.permissionMode === m.value) rememberLastUsed({ permissionMode: m.value });
+        return;
       case 'setEffort':
+        if (typeof m.value !== 'string' || !this.status.models.some((x) => x.effortLevels.includes(m.value))) return;
         await this.q?.applyFlagSettings({ effortLevel: m.value as any });
+        this.picks.effort = m.value;
+        rememberLastUsed({ effort: m.value });
         await this.refreshSettings();
         this.pushStatus();
         return;
@@ -683,8 +723,8 @@ export class ChatSession {
       case 'refreshStatus':
         await this.refreshContext();
         return;
-      case 'reportProblem':
-        await vscode.commands.executeCommand('claudePanel.reportProblem');
+      case 'report':
+        if (typeof m.text === 'string' && (m.text.trim() || validImages(m.images).length)) await this.host.saveReport(this, m.text.slice(0, 100_000), validImages(m.images));
         return;
       case 'log':
         log(`[view] ${m.text}`);
@@ -702,7 +742,14 @@ export class ChatSession {
     }
     await this.q?.setPermissionMode(mode as any);
     this.status.permissionMode = mode;
+    this.picks.permissionMode = mode;
     this.pushStatus();
+  }
+
+  /** Open the report form in this panel. */
+  showReportForm() {
+    this.panel.reveal();
+    this.post({ t: 'showReport' });
   }
 
   private async setRemote(on: boolean) {
@@ -720,7 +767,7 @@ export class ChatSession {
   }
 
   send(text: string, images: ImageAttachment[] = []) {
-    images = images.filter((i) => /^image\/(png|jpeg|gif|webp)$/.test(i.mediaType) && i.data.length < 7_000_000).slice(0, 10);
+    images = validImages(images);
     if (!text.trim() && !images.length) return;
     const uuid = randomUUID();
     this.transcript.addUser(text, uuid, images.map((i) => `data:${i.mediaType};base64,${i.data}`));
@@ -842,71 +889,6 @@ async function updateViewConfig(patch: Partial<ViewConfig>) {
     toolActivity: (v) => v === 'hidden' || v === 'summary' || v === 'detailed',
   };
   for (const [k, v] of Object.entries(patch)) if (valid[k]?.(v)) await c.update(k, v, vscode.ConfigurationTarget.Global);
-}
-
-/** The real location of a path, following symlinks/junctions of its nearest existing ancestor. */
-function realPath(p: string): string {
-  let rest = '';
-  for (let cur = p; ; cur = path.dirname(cur)) {
-    try {
-      return path.join(fs.realpathSync.native(cur), rest);
-    } catch {
-      if (path.dirname(cur) === cur) return p;
-      rest = path.join(path.basename(cur), rest);
-    }
-  }
-}
-
-function isInside(file: string, root: string) {
-  const rel = path.relative(root, file);
-  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
-}
-
-/**
- * Open a link from a reply. Web links go to the browser (VS Code asks about
- * untrusted domains). Anything else must be a file: network paths
- * (\\server\share) and other URI schemes are refused, because opening a network
- * path makes Windows connect to that server with your login; files outside
- * the project need a confirmation.
- */
-async function openLink(href: string, cwd: string) {
-  if (/^https?:\/\//i.test(href) || /^mailto:/i.test(href)) {
-    await vscode.env.openExternal(vscode.Uri.parse(href));
-    return;
-  }
-  const m = href.match(/^(.*?)(?:#L(\d+)(?:-L?(\d+))?)?$/);
-  if (!m) return;
-  let file: string;
-  try {
-    file = decodeURIComponent(m[1]);
-  } catch {
-    return;
-  }
-  const scheme = /^[a-z][a-z0-9+.-]*:/i.test(file) && !/^[a-z]:[\\/]/i.test(file);
-  if (/^[\\/]{2}/.test(file) || scheme) {
-    log(`refused link ${JSON.stringify(href).slice(0, 200)}`);
-    void vscode.window.showWarningMessage(`Not opened: ${file.slice(0, 120)} is not a web link or a local file.`);
-    return;
-  }
-  file = realPath(path.resolve(cwd, file));
-  if (/^[\\/]{2}/.test(file)) {
-    log(`refused link to a network location ${JSON.stringify(file).slice(0, 200)}`);
-    void vscode.window.showWarningMessage('Not opened: that link leads to a network location.');
-    return;
-  }
-  const roots = [cwd, ...(vscode.workspace.workspaceFolders ?? []).map((f) => f.uri.fsPath)].map(realPath);
-  if (!roots.some((r) => isInside(file, r))) {
-    const ok = await vscode.window.showWarningMessage('Open a file outside this project?', { modal: true, detail: file }, 'Open');
-    if (ok !== 'Open') return;
-  }
-  const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(file));
-  const line = m[2] ? Math.max(0, Number(m[2]) - 1) : 0;
-  const end = m[3] ? Math.max(line, Number(m[3]) - 1) : line;
-  await vscode.window.showTextDocument(doc, {
-    viewColumn: vscode.ViewColumn.One,
-    selection: new vscode.Range(line, 0, end, 0),
-    preview: true,
-  });
 }
 
 async function findFiles(q: string, cwd: string): Promise<string[]> {

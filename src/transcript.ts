@@ -32,8 +32,25 @@ const IGNORED_SYSTEM = new Set([
   'control_request_progress',
   'worker_shutting_down',
   'bridge_state', // read by the session for the remote-control indicator
+  'session_metadata', // artifact list for remote clients
 ]);
-const IGNORED_TYPES = new Set(['command_lifecycle', 'turn_preempted', 'keep_alive', 'tool_progress', 'auth_status', 'prompt_suggestion', 'tool_use_summary', 'rate_limit_event']);
+const IGNORED_TYPES = new Set([
+  'command_lifecycle',
+  'turn_preempted',
+  'keep_alive',
+  'tool_progress',
+  'auth_status',
+  'prompt_suggestion',
+  'tool_use_summary',
+  'rate_limit_event',
+  'active_goal', // /goal progress
+  'autocompact_state',
+]);
+// Tasks that are agents and get a tab. Anything else (a shell command, an MCP
+// call) is already shown as tool activity, and gets a tab only while it runs
+// in the background, so it can be watched and stopped.
+const AGENT_TASKS = new Set(['local_agent', 'local_workflow']);
+const TASK_KINDS: Record<string, string> = { local_bash: 'background command', local_workflow: 'workflow', mcp_task: 'background MCP call' };
 
 export interface HandleResult {
   unknown?: boolean;
@@ -54,6 +71,8 @@ export class Transcript {
   private toolIndex = new Map<string, { threadId: string; itemId: string }>();
   private taskToThread = new Map<string, string>(); // task_id / agentId -> thread id
   private pendingTaskCreates = new Map<string, { threadId: string; tempId: string }>();
+  /** Running foreground tasks that are not agents, kept in case they move to the background. */
+  private quietTasks = new Map<string, any>();
   /** uuid of the latest main-thread message: the fork point for the next user message. */
   private lastUuid: string | undefined;
   private seq = 0;
@@ -80,7 +99,7 @@ export class Transcript {
   }
 
   setMainRunning(running: boolean) {
-    this.updateThread('main', { status: running ? 'running' : 'done' });
+    this.updateThread('main', running ? { status: 'running' } : { status: 'done', activity: undefined });
   }
 
   ensureThread(id: string, meta: Partial<ThreadMeta>): ThreadMeta {
@@ -101,6 +120,7 @@ export class Transcript {
       if (patch.status === 'running') patch = { ...patch, endedAt: undefined };
       else if (t.status === 'running' && !patch.endedAt) patch = { ...patch, endedAt: at };
     }
+    if (Object.entries(patch).every(([k, v]) => (t as any)[k] === v)) return;
     Object.assign(t, patch);
     this.emit({ t: 'thread', thread: t });
   }
@@ -200,6 +220,7 @@ export class Transcript {
 
   private onAssistant(m: any): HandleResult {
     const threadId = this.threadOf(m.parent_tool_use_id);
+    if (threadId !== 'main') this.noteUsage(threadId, m.message);
     const content = Array.isArray(m.message?.content) ? m.message.content : [];
     for (const b of content) {
       if (b.type === 'text') {
@@ -216,22 +237,34 @@ export class Transcript {
     return {};
   }
 
+  /** A subagent's replies name the model it runs on and show how large its conversation has grown. */
+  private noteUsage(threadId: string, message: any) {
+    const u = message?.usage;
+    const size = u ? (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.output_tokens ?? 0) : 0;
+    const patch: Partial<ThreadMeta> = {};
+    if (typeof message?.model === 'string' && /^[\w.[\]-]+$/.test(message.model)) patch.model = message.model;
+    if (size > 0) patch.contextTokens = size;
+    this.updateThread(threadId, patch);
+  }
+
   private onToolUse(threadId: string, b: any, m: any) {
     if (AGENT_TOOLS.has(b.name)) {
       const input = b.input ?? {};
       const title = input.description || input.name || 'Subagent';
+      // Without a subagent_type, Claude Code runs its general-purpose agent.
+      const agentType = input.subagent_type || 'general-purpose';
       this.ensureThread(b.id, {
         title,
-        agentType: input.subagent_type,
+        agentType,
         model: input.model,
         parentId: threadId,
         status: 'running',
         background: !!input.run_in_background,
         startedAt: ts(m),
       });
-      this.updateThread(b.id, { title, agentType: input.subagent_type, parentId: threadId });
+      this.updateThread(b.id, { title, agentType, parentId: threadId });
       this.addPrompt(b.id, input.prompt);
-      this.put(threadId, { kind: 'agent', id: `agent-${b.id}`, threadId: b.id, title, agentType: input.subagent_type });
+      this.put(threadId, { kind: 'agent', id: `agent-${b.id}`, threadId: b.id, title, agentType });
       return;
     }
     if (TODO_TOOLS.has(b.name)) {
@@ -361,8 +394,17 @@ export class Transcript {
         this.updateThread(thread.id, { background: true });
         return;
       }
-      this.updateThread(thread.id, { status: b.is_error ? 'error' : 'done' }, ts(m));
+      this.updateThread(thread.id, { status: b.is_error ? 'error' : 'done', activity: undefined }, ts(m));
     }
+  }
+
+  /** Open the tab for a task Claude Code has started. */
+  private startTask(m: any) {
+    const kind = m.subagent_type || TASK_KINDS[m.task_type];
+    const t = this.ensureThread(m.tool_use_id, { title: m.description || 'Subagent', agentType: kind, status: 'running', startedAt: ts(m) });
+    this.taskToThread.set(m.task_id, t.id);
+    this.updateThread(t.id, { background: !!m.is_backgrounded, status: 'running', taskId: m.task_id, ...(kind ? { agentType: kind } : {}) });
+    this.addPrompt(t.id, m.prompt);
   }
 
   private onSystem(m: any): HandleResult {
@@ -370,25 +412,40 @@ export class Transcript {
       case 'init':
         return {};
       case 'task_started': {
-        if (!m.tool_use_id) return {};
-        const t = this.ensureThread(m.tool_use_id, { title: m.description || 'Subagent', agentType: m.subagent_type, status: 'running', startedAt: ts(m) });
-        this.taskToThread.set(m.task_id, t.id);
-        this.updateThread(t.id, { background: !!m.is_backgrounded, status: 'running', taskId: m.task_id });
-        this.addPrompt(t.id, m.prompt);
+        if (!m.tool_use_id || m.skip_transcript) return {};
+        const agent = this.threads.has(m.tool_use_id) || !m.task_type || AGENT_TASKS.has(m.task_type);
+        if (agent || m.is_backgrounded) this.startTask(m);
+        else this.quietTasks.set(m.task_id, m);
         return {};
       }
       case 'task_updated': {
-        const id = this.taskToThread.get(m.task_id);
+        const quiet = this.quietTasks.get(m.task_id);
         const s = m.patch?.status;
-        if (id && s) this.updateThread(id, { status: mapTaskStatus(s) }, m.patch?.end_time ?? Date.now());
+        const ended = !!s && mapTaskStatus(s) !== 'running';
+        if (quiet && (ended || m.patch?.is_backgrounded)) this.quietTasks.delete(m.task_id);
+        if (quiet && m.patch?.is_backgrounded && !ended) this.startTask({ ...quiet, is_backgrounded: true });
+        const id = this.taskToThread.get(m.task_id);
+        if (!id) return {};
+        if (m.patch?.is_backgrounded) this.updateThread(id, { background: true });
+        if (s) this.updateThread(id, ended ? { status: mapTaskStatus(s), activity: undefined } : { status: 'running' }, m.patch?.end_time ?? Date.now());
         return {};
       }
       case 'task_notification': {
+        this.quietTasks.delete(m.task_id);
         const id = m.tool_use_id || this.taskToThread.get(m.task_id);
-        if (id && this.threads.has(id)) this.updateThread(id, { status: mapTaskStatus(m.status) });
+        if (id && this.threads.has(id)) this.updateThread(id, { status: mapTaskStatus(m.status), activity: undefined });
         return {};
       }
-      case 'task_progress':
+      case 'task_progress': {
+        const id = this.taskToThread.get(m.task_id) ?? m.tool_use_id;
+        if (!id || !this.threads.has(id) || this.threads.get(id)!.status !== 'running') return {};
+        const activity = m.summary ? short(m.summary, 160) : m.last_tool_name ? `Using ${m.last_tool_name}` : undefined;
+        if (activity) this.updateThread(id, { activity });
+        return {};
+      }
+      case 'task_summary':
+        // One line on what Claude is doing right now (null when there is nothing to say).
+        this.updateThread('main', { activity: typeof m.detail === 'string' && m.detail.trim() ? short(m.detail, 160) : undefined });
         return {};
       case 'compact_boundary':
         this.notice('main', 'info', 'Conversation compacted.');

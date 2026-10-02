@@ -9,7 +9,8 @@ import { readConfig, log, setBundledExecutable, showLog } from './config';
 import { readBuildInfo, fetchLatest, newer, showChangelog, runUpdate, type Latest } from './updates';
 import { checkAuth, signIn } from './auth';
 import { initTrust } from './trust';
-import { reportProblem } from './report';
+import { reportProblem, saveReport } from './report';
+import { initPrefs, onLastUsedChange } from './prefs';
 
 const VIEW_TYPE = 'claudePanel.chat';
 const sessions = new Set<ChatSession>();
@@ -22,6 +23,7 @@ let lastActive: ChatSession | undefined;
 const host: SessionHost = {
   openSession: (id, cwd, prefill) => openPanel(id, cwd, prefill),
   sessionsChanged: () => setTimeout(() => history.refresh(), 500),
+  saveReport: (s, text, images) => saveReport(extUri.fsPath, s, text, images),
 };
 
 export function activate(ctx: vscode.ExtensionContext) {
@@ -31,9 +33,13 @@ export function activate(ctx: vscode.ExtensionContext) {
   setBundledExecutable(path.join(ctx.extensionPath, 'dist', info?.exe ?? 'bin/claude.exe'));
   history = new SessionsView();
   initTrust(ctx.globalState);
+  initPrefs(ctx.globalState);
+  // New tabs start with the model, effort and mode you picked last: replace a spare started with the old ones.
+  onLastUsedChange(() => warm.refresh());
 
   ctx.subscriptions.push(
     vscode.commands.registerCommand('claudePanel.newSession', () => openPanel()),
+    vscode.commands.registerCommand('claudePanel.newSessionTab', () => openPanel()), // the button on every editor's title bar
     vscode.commands.registerCommand('claudePanel.openSession', (arg?: SessionEntry | string, cwd?: string) => {
       if (typeof arg === 'string') return openPanel(arg, cwd);
       if (arg?.id) return openPanel(arg.id, arg.cwd);
@@ -112,10 +118,12 @@ function openPanel(resumeId?: string, cwd = defaultCwd(), prefill?: string) {
     const open = [...sessions].find((s) => s.sessionId === resumeId);
     if (open) return open.panel.reveal();
   }
+  // From a MathPanel tab: a new tab next to it. From anywhere else: beside the editor you are in.
+  const inPanel = !!lastActive?.panel.active;
   const panel = vscode.window.createWebviewPanel(
     VIEW_TYPE,
     'New session',
-    { viewColumn: vscode.ViewColumn.Beside, preserveFocus: false },
+    { viewColumn: inPanel ? vscode.ViewColumn.Active : vscode.ViewColumn.Beside, preserveFocus: false },
     { enableFindWidget: true, retainContextWhenHidden: true },
   );
   attach(panel, cwd, resumeId, prefill);
