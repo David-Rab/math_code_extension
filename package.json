@@ -2,7 +2,7 @@
   "name": "mathpanel",
   "displayName": "MathPanel (unofficial)",
   "description": "Unofficial conversation-first panel for Claude Code: subagent tabs, LaTeX rendering, status bar. Not affiliated with Anthropic.",
-  "version": "0.2.283",
+  "version": "0.2.287",
   "publisher": "david-local",
   "private": true,
   "license": "MIT",
@@ -337,7 +337,7 @@
     "precommit": "npm run typecheck && npm test && node scripts/privacy-check.mjs"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "0.3.283",
+    "@anthropic-ai/claude-agent-sdk": "0.3.287",
     "katex": "^0.18.9",
     "markdown-it": "^15.0.2",
     "preact": "^10.29.8"

@@ -339,6 +339,8 @@ export class ChatSession {
     } else if (m.type === 'system' && m.subtype === 'status' && m.permissionMode) {
       this.status.permissionMode = m.permissionMode;
       this.pushStatus();
+    } else if (m.type === 'system' && m.subtype === 'session_title_changed' && typeof m.title === 'string' && m.title.trim()) {
+      this.setTitle(m.title.trim().slice(0, 200));
     } else if (m.type === 'auth_status' && m.error) {
       this.needSignIn(`Claude Code reported a sign-in problem: ${m.error}`);
     }

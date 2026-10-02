@@ -107,7 +107,8 @@ const s = new ChatSession(panel as any, work, warm, host);
 await s.start();
 panel.fromView({ t: 'ready' });
 
-const PROMPT = `First use the TodoWrite tool to make a checklist of the five steps below, and keep it updated as you go. Then do these steps in order:
+// Claude Code 2.1.287 has no TodoWrite in SDK sessions: the checklist is made with TaskCreate, one call per entry.
+const PROMPT = `First make a checklist with a separate entry for each of the five steps below: call the TaskCreate tool once per step (or use TodoWrite if you have that instead), and mark each entry completed as you go. Then do these steps in order:
 1) Create a file named e2e.txt containing the word hi, using the Write tool.
 2) Use the Bash tool to run exactly this command, in the foreground: sleep 4 && echo slept
 3) Use the AskUserQuestion tool to ask me which color I prefer, with the options Red and Blue.

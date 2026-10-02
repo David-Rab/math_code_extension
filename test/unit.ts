@@ -84,6 +84,11 @@ const toolResult = (id: string, content: any, extra: any = {}) => ({ type: 'user
   check('the summary goes away when the turn ends', t.threads.get('main')!.activity === undefined);
   const quiet = [{ type: 'system', subtype: 'session_metadata', metadata: {} }, { type: 'active_goal', value: null }, { type: 'autocompact_state', value: {} }].map((m) => t.handle(m));
   check('session_metadata, active_goal, autocompact_state are not "unsupported"', quiet.every((x) => !x.unknown));
+  // 2.1.287: the session title, and what plugins ("Claude Mods") draw.
+  const mods = ['session_title_changed', 'ui_status', 'ui_log', 'ui_panes', 'ui_scroll', 'ui_focus', 'ui_invalidate'].map((subtype) => t.handle({ type: 'system', subtype, title: 'x', plugin: 'p', text: 'y' }));
+  check('session_title_changed and plugin panes are not "unsupported"', mods.every((x) => !x.unknown) && !(t.items.get('main') ?? []).some((i) => i.kind === 'unknown'));
+  const toast = t.handle({ type: 'system', subtype: 'ui_toast', plugin: 'you-should-know', text: 'The tests were not run.', timeout_ms: 5000 });
+  check("a plugin's notification is shown", !toast.unknown && (t.items.get('main') ?? []).some((i) => i.kind === 'notice' && i.text === 'you-should-know: The tests were not run.'), t.items.get('main'));
 }
 
 // --- only agents get a tab; a shell command gets one only while it runs in the background

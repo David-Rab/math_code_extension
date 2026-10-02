@@ -33,6 +33,14 @@ const IGNORED_SYSTEM = new Set([
   'worker_shutting_down',
   'bridge_state', // read by the session for the remote-control indicator
   'session_metadata', // artifact list for remote clients
+  'session_title_changed', // read by the session for the tab title
+  // Panes, status rows and logs drawn by "Claude Mods" plugins (2.1.287); this panel shows only their notifications.
+  'ui_status',
+  'ui_log',
+  'ui_panes',
+  'ui_scroll',
+  'ui_focus',
+  'ui_invalidate',
 ]);
 const IGNORED_TYPES = new Set([
   'command_lifecycle',
@@ -466,6 +474,10 @@ export class Transcript {
       case 'model_refusal_fallback':
       case 'model_refusal_no_fallback':
         this.notice('main', 'warn', m.message ?? m.subtype.replace(/_/g, ' '));
+        return {};
+      case 'ui_toast':
+        // A notification from a plugin.
+        if (typeof m.text === 'string' && m.text.trim()) this.notice('main', 'info', `${typeof m.plugin === 'string' && m.plugin ? `${short(m.plugin, 60)}: ` : ''}${short(m.text, 500)}`);
         return {};
       case 'plugin_install':
         if (m.status === 'failed') this.notice('main', 'warn', `Plugin ${m.name ?? ''} failed to install${m.error ? `: ${m.error}` : ''}`);
