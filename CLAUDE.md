@@ -16,6 +16,7 @@ Reads only your text messages, never tool calls, diffs or command output: put ev
 - To put a panel-only fix on this machine: raise the minor version (`npm version 0.<n+1>.<patch> --no-git-tag-version`), `npm run package`, `code --install-extension mathpanel.vsix --force`, then the user reloads the window. A new version installs into a new folder; the same version would have to overwrite the `claude.exe` that open panels are running.
 - Live checks against the real claude.exe (short Haiku sessions): `npm run e2e -- <scratch dir>`, `npm run trust-e2e -- <new scratch dir>`.
 - Render benchmark / screenshots of real sessions: `test/harness.ts` + `test/cdp.mjs` (headless Chrome).
+- `npm run test-copy` (after `npm run build`; needs Chrome) checks copy-as-Markdown on the real bundle: run it when `webview/copy.ts` or `webview/markdown.ts` changes. `COPY_EXTRA=<json file of strings>` adds more replies to round-trip; keep such files in `.test/`, never in the repo.
 - Write files containing backslashes (regexes, `\n`, LaTeX) with the Write/Edit tools, not shell heredocs: the shell halves backslashes.
 - Commit after each working step (git repo, branch `main`, remote `origin` on GitHub). The repo is public: never commit personal data (paths with the username, session or account ids, recorded sessions that aren't scrubbed, private project names); commits use the GitHub noreply email.
 - Internal ids stay `claudePanel.*` (settings, commands, view types) so user settings and open panels carry over; visible names say MathPanel.

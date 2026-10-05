@@ -25,10 +25,15 @@ export function setMacros(user: Record<string, string> | undefined) {
 }
 
 const texCache = new Map<string, string>();
-function tex(src: string, display: boolean): string {
+/**
+ * `source` is the formula exactly as it was written, delimiters included. It is kept on the
+ * element (data-tex) so that copying a selection gives the LaTeX back, not the drawn glyphs.
+ */
+function tex(src: string, display: boolean, source: string): string {
+  const data = ` data-tex="${escapeHtml(source)}"`;
   if (!renderMath) {
     const raw = escapeHtml(display ? `$$${src}$$` : `$${src}$`);
-    return display ? `<pre class="tex-raw">${raw}</pre>` : `<code class="tex-raw">${raw}</code>`;
+    return display ? `<pre class="tex-raw"${data}>${raw}</pre>` : `<code class="tex-raw"${data}>${raw}</code>`;
   }
   const key = (display ? 'D' : 'I') + src;
   let out = texCache.get(key);
@@ -41,7 +46,7 @@ function tex(src: string, display: boolean): string {
     if (texCache.size > 3000) texCache.clear();
     texCache.set(key, out);
   }
-  return display ? `<div class="math-display">${out}</div>` : out;
+  return display ? `<div class="math-display"${data}>${out}</div>` : `<span class="math-inline"${data}>${out}</span>`;
 }
 
 function escapeHtml(s: string) {
@@ -63,6 +68,7 @@ function mathInline(state: StateInline, silent: boolean): boolean {
     if (!silent) {
       const t = state.push(next === '(' ? 'math_inline' : 'math_inline_display', 'math', 0);
       t.content = src.slice(start + 2, end);
+      t.markup = src.slice(start, end + 2);
     }
     state.pos = end + 2;
     return true;
@@ -77,6 +83,7 @@ function mathInline(state: StateInline, silent: boolean): boolean {
     if (!silent) {
       const t = state.push('math_inline_display', 'math', 0);
       t.content = src.slice(start + 2, end);
+      t.markup = src.slice(start, end + 2);
     }
     state.pos = end + 2;
     return true;
@@ -102,6 +109,7 @@ function mathInline(state: StateInline, silent: boolean): boolean {
   if (!silent) {
     const t = state.push('math_inline', 'math', 0);
     t.content = src.slice(start + 1, end);
+    t.markup = src.slice(start, end + 1);
   }
   state.pos = end + 1;
   return true;
@@ -150,6 +158,7 @@ function mathBlock(state: StateBlock, startLine: number, endLine: number, silent
   if (!found) return false; // unterminated (e.g. still streaming): leave as text
   const token = state.push('math_block', 'math', 0);
   token.content = body;
+  token.markup = keepDelims ? body : `${open}${body}${close}`;
   token.map = [startLine, line + 1];
   state.line = line + 1;
   return true;
@@ -158,9 +167,9 @@ function mathBlock(state: StateBlock, startLine: number, endLine: number, silent
 const md = new MarkdownIt({ html: false, linkify: true, breaks: false, typographer: false });
 md.inline.ruler.before('escape', 'math_inline', mathInline);
 md.block.ruler.before('fence', 'math_block', mathBlock, { alt: ['paragraph', 'reference', 'blockquote', 'list'] });
-md.renderer.rules.math_inline = (t, i) => tex(t[i].content, false);
-md.renderer.rules.math_inline_display = (t, i) => tex(t[i].content, true);
-md.renderer.rules.math_block = (t, i) => tex(t[i].content, true);
+md.renderer.rules.math_inline = (t, i) => tex(t[i].content, false, t[i].markup);
+md.renderer.rules.math_inline_display = (t, i) => tex(t[i].content, true, t[i].markup);
+md.renderer.rules.math_block = (t, i) => tex(t[i].content, true, t[i].markup);
 
 // Links: keep the target in data-href; the click handler asks the extension to open it.
 const defaultLinkOpen = md.renderer.rules.link_open ?? ((t, i, o, _e, self) => self.renderToken(t, i, o));

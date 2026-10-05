@@ -39,7 +39,12 @@ and adds a clean conversation view, a tab per subagent, and rendered math.
   main agent also shows its effort, permission mode and context %.
 - **Math:** KaTeX for `$…$`, `$$…$$`, `\(…\)`, `\[…\]` and `align`-style
   environments; ∑ toggles to source. `\F \Q \C \E` built in, more via the
-  `mathMacros` setting. Copy button keeps the LaTeX.
+  `mathMacros` setting.
+- **Copy as Markdown:** selecting text in the conversation and pressing Ctrl+C
+  copies exactly the selection as Markdown source (headings, lists, tables,
+  emphasis, links, code, and each formula as the LaTeX it was written with), so
+  it pastes into a `.md` file and renders the same. The copy button on a reply
+  copies the whole reply the same way.
 - **Status bar:** model, effort, permission mode, context %, cache %, 5-hour and
   7-day plan usage, remote control, Claude Code version, ⚑ report a problem.
 - **Cards:** permission prompts (with the edit or file content and Claude Code's
@@ -99,6 +104,7 @@ npm test                     # transcript replay, unit, host (links, settings, r
 node test/smoke.cjs          # production bundle loads (after a build)
 npm run e2e -- <scratch dir> # live session (Haiku); auto-approves everything, use an empty scratch dir
 npm run trust-e2e -- <new scratch dir>  # live folder-trust flow
+npm run test-copy            # copy-as-Markdown in headless Chrome (after a build; needs Chrome)
 npm run package              # mathpanel.vsix, for your own machine only
 code --install-extension mathpanel.vsix --force
 ```

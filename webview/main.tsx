@@ -3,6 +3,7 @@ import { memo } from 'preact/compat';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { HostToView, ImageAttachment, Item, Snapshot, Status, ThreadMeta, Todo, ViewConfig, ViewToHost, Question } from '../src/shared/protocol';
 import { renderMarkdown, setRenderMath, setMacros, splitDraft } from './markdown';
+import { selectionToMarkdown } from './copy';
 
 declare function acquireVsCodeApi(): { postMessage(m: unknown): void; getState(): any; setState(s: any): void };
 const vscode = acquireVsCodeApi();
@@ -479,7 +480,7 @@ function ThreadView({ thread, items, draft, config }: { thread: ThreadMeta; item
   };
 
   return (
-    <div class="thread" ref={ref} onScroll={onScroll} onClick={onLinkClick}>
+    <div class="thread" ref={ref} onScroll={onScroll} onClick={onLinkClick} onCopy={onCopy}>
       {thread.id !== 'main' && <SubagentHeader thread={thread} />}
       {hidden > 0 && (
         <button class="show-earlier" onClick={() => loadEarlier()}>
@@ -523,6 +524,16 @@ function mergeActivity(items: Item[], config: ViewConfig): Item[] {
     out.push(it);
   }
   return out;
+}
+
+/** Ctrl+C on a selection in the conversation copies it as Markdown source (formulas as LaTeX), not as drawn text. */
+function onCopy(e: ClipboardEvent) {
+  const from = e.target as HTMLElement | null;
+  if (!e.clipboardData || from?.tagName === 'INPUT' || from?.tagName === 'TEXTAREA') return;
+  const text = selectionToMarkdown(window.getSelection(), e.currentTarget as Element);
+  if (text === null) return;
+  e.clipboardData.setData('text/plain', text);
+  e.preventDefault();
 }
 
 function onLinkClick(e: MouseEvent) {

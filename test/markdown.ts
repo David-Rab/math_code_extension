@@ -42,7 +42,8 @@ for (const [name, src, want] of splitCases) {
 
 let failed = 0;
 for (const [name, src, ok] of cases) {
-  const h = renderMarkdown(src, false);
+  // What is drawn: without the formula source each math element carries for copying.
+  const h = renderMarkdown(src, false).replace(/ data-tex="[^"]*"/g, '');
   const pass = ok(h);
   if (!pass) failed++;
   console.log(`${pass ? 'PASS' : 'FAIL'}  ${name}${pass ? '' : '\n      ' + h.slice(0, 300)}`);
@@ -53,6 +54,16 @@ const rawOk = raw.includes('tex-raw') && raw.includes('$x_1$') && !raw.includes(
 if (!rawOk) failed++;
 console.log(`${rawOk ? 'PASS' : 'FAIL'}  math off shows source`);
 setRenderMath(true);
+// Each formula carries its source exactly as written, for copying a selection as Markdown.
+const srcs = [...renderMarkdown('A $a_1$ and \\(b\\) then \\[ c \\] and $$d$$.\n\n$$\ne=f\n$$\n\n\\begin{align}\ng &= h\n\\end{align}', false).matchAll(/data-tex="([^"]*)"/g)].map((m) => m[1].replace(/&amp;/g, '&'));
+const srcOk = JSON.stringify(srcs) === JSON.stringify(['$a_1$', '\\(b\\)', '\\[ c \\]', '$$d$$', '$$\ne=f\n$$', '\\begin{align}\ng &= h\n\\end{align}']);
+if (!srcOk) failed++;
+console.log(`${srcOk ? 'PASS' : 'FAIL'}  formulas keep their source${srcOk ? '' : `\n      ${JSON.stringify(srcs)}`}`);
+// The stored source is text in an attribute: it must not be able to add attributes or elements.
+const hostile = renderMarkdown('Bad $x" onmouseover="alert(1)" y="$ and $a<img src=x onerror=alert(1)>b$.', false);
+const safe = !/<[^>]*\sonmouseover=/.test(hostile) && !/<img/i.test(hostile) && hostile.includes('data-tex="$x&quot; onmouseover=&quot;alert(1)&quot; y=&quot;$"');
+if (!safe) failed++;
+console.log(`${safe ? 'PASS' : 'FAIL'}  a formula's stored source cannot inject markup${safe ? '' : `\n      ${hostile}`}`);
 // Your own messages keep every line break you typed; replies follow Markdown (a single break is a space).
 const typed = 'first line\nsecond line\n\nnew paragraph with $x^2$';
 const kept = renderMarkdown(typed, true, true);
