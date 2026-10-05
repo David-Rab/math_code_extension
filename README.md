@@ -32,6 +32,8 @@ and adds a clean conversation view, a tab per subagent, and rendered math.
 - **Subagent tabs:** a tab per subagent with its task, replies and live status;
   a warning bar when a background tab needs you. Ordinary shell commands get no
   tab; one that runs in the background has a tab while it runs, so it can be stopped.
+  An agent the main agent messages again later continues in its own tab, with
+  the follow-up message shown there.
   **Agent map** (⌬, Ctrl+Shift+M): a tree of all agents with their kind, model,
   context size, status, running time, actions and what each is doing now; the
   main agent also shows its effort, permission mode and context %.
@@ -51,7 +53,9 @@ and adds a clean conversation view, a tab per subagent, and rendered math.
   panels come back with the window; a reopened session starts Claude Code only
   when you look at it. A new tab starts with the model, effort and permission
   mode you picked last (unless the `initialModel` / `initialPermissionMode`
-  settings pin them).
+  settings pin them). In the Sessions sidebar you can pin sessions to the top
+  and put them in named groups (kept in the extension's own storage; the
+  conversations themselves are not touched).
 - **Notifications:** sound and VS Code notification when Claude needs you (and
   when it finishes), only when you are not looking at that panel.
 - **Fast start:** one pre-warmed Claude Code per window.
@@ -123,7 +127,7 @@ in full, and the panel log.
 | `src/warm.ts` | the pre-warmed spare `claude.exe` |
 | `src/auth.ts`, `src/trust.ts` | sign-in and folder trust via Claude Code |
 | `src/notify.ts`, `src/report.ts`, `src/updates.ts` | notifications, problem reports, updates |
-| `src/links.ts`, `src/prefs.ts` | opening links from replies; the model, effort and mode remembered for new tabs |
+| `src/links.ts`, `src/prefs.ts`, `src/organize.ts` | opening links from replies; the model, effort and mode remembered for new tabs; session pins and groups |
 | `webview/` | the panel UI (Preact), Markdown + KaTeX renderer, styles |
 | `test/` | replay, unit, host (fake VS Code), renderer, e2e, trust e2e, benchmark harness |
 
