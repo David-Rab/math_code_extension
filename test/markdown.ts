@@ -61,7 +61,9 @@ if (!srcOk) failed++;
 console.log(`${srcOk ? 'PASS' : 'FAIL'}  formulas keep their source${srcOk ? '' : `\n      ${JSON.stringify(srcs)}`}`);
 // The stored source is text in an attribute: it must not be able to add attributes or elements.
 const hostile = renderMarkdown('Bad $x" onmouseover="alert(1)" y="$ and $a<img src=x onerror=alert(1)>b$.', false);
-const safe = !/<[^>]*\sonmouseover=/.test(hostile) && !/<img/i.test(hostile) && hostile.includes('data-tex="$x&quot; onmouseover=&quot;alert(1)&quot; y=&quot;$"');
+// A real attribute would follow the tag name or a complete quoted attribute; inside a quoted value it is only text.
+const realAttribute = /<\w+(?:\s+[\w-]+="[^"]*")*\s+on\w+=/;
+const safe = !realAttribute.test(hostile) && !/<img/i.test(hostile) && hostile.includes('data-tex="$x&quot; onmouseover=&quot;alert(1)&quot; y=&quot;$"') && realAttribute.test('<span class="a" onmouseover="x">');
 if (!safe) failed++;
 console.log(`${safe ? 'PASS' : 'FAIL'}  a formula's stored source cannot inject markup${safe ? '' : `\n      ${hostile}`}`);
 // Your own messages keep every line break you typed; replies follow Markdown (a single break is a space).
