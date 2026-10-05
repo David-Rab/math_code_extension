@@ -139,6 +139,71 @@ const toolResult = (id: string, content: any, extra: any = {}) => ({ type: 'user
   check('an update that changes nothing is not sent to the view', emitted === before, emitted - before);
 }
 
+// --- an agent continued with SendMessage stays in its tab (live)
+{
+  const t = new Transcript();
+  t.handle(asst([{ type: 'tool_use', id: 'ag', name: 'Agent', input: { description: 'fixer', prompt: 'fix it', run_in_background: true } }]));
+  t.handle({ type: 'system', subtype: 'task_started', task_id: 'T1', tool_use_id: 'ag', description: 'fixer', subagent_type: 'general-purpose', task_type: 'local_agent', is_backgrounded: true });
+  t.handle(toolResult('ag', 'Async agent launched successfully. agentId: T1 (internal ID)'));
+  t.handle(asst([{ type: 'text', text: 'first report' }], { parent_tool_use_id: 'ag' }));
+  t.handle({ type: 'system', subtype: 'task_notification', task_id: 'T1', tool_use_id: 'ag', status: 'completed' });
+  check('background agent finished', t.threads.get('ag')?.status === 'done');
+
+  t.handle(asst([{ type: 'tool_use', id: 'sm', name: 'SendMessage', input: { to: 'T1', message: 'now also do this' } }]));
+  t.handle({ type: 'system', subtype: 'task_started', task_id: 'T1', tool_use_id: 'sm', description: 'fixer', subagent_type: 'general-purpose', task_type: 'local_agent', is_backgrounded: true });
+  check('a continued agent gets no second tab', t.threads.size === 2 && !t.threads.has('sm'), [...t.threads.keys()]);
+  check('…and runs again in its own tab', t.threads.get('ag')?.status === 'running' && t.threads.get('ag')?.endedAt === undefined, t.threads.get('ag'));
+  const follow = (t.items.get('ag') ?? []).filter((i) => i.kind === 'prompt');
+  check('the follow-up message is shown in that tab, after the task', follow.length === 2 && follow[1].kind === 'prompt' && follow[1].followUp === true && follow[1].text === 'now also do this', follow);
+  t.handle(toolResult('sm', '{"success":true}'));
+  t.handle(asst([{ type: 'tool_use', id: 'x1', name: 'Bash', input: { command: 'ls' } }], { parent_tool_use_id: 'ag' }));
+  t.handle({ type: 'system', subtype: 'task_progress', task_id: 'T1', tool_use_id: 'sm', description: 'fixer', usage: {}, last_tool_name: 'Bash' });
+  check('its activity goes to that tab', t.threads.get('ag')?.activity === 'Using Bash' && (t.items.get('ag') ?? []).some((i) => i.kind === 'tools'));
+  t.handle({ type: 'system', subtype: 'task_notification', task_id: 'T1', tool_use_id: 'sm', status: 'completed' });
+  check('…and it finishes there', t.threads.get('ag')?.status === 'done' && t.threads.size === 2, t.threads.get('ag'));
+
+  t.handle(asst([{ type: 'tool_use', id: 'sm2', name: 'SendMessage', input: { to: 'T1', message: 'again' } }]));
+  t.handle({ type: 'system', subtype: 'task_started', task_id: 'T1', tool_use_id: 'sm2', description: 'fixer', task_type: 'local_agent', is_backgrounded: true });
+  t.handle({ type: 'system', subtype: 'task_updated', task_id: 'T1', patch: { status: 'killed' } });
+  check('a continued agent can be stopped', t.threads.get('ag')?.status === 'stopped' && t.threads.get('ag')?.taskId === 'T1');
+  t.handle(asst([{ type: 'tool_use', id: 'sm3', name: 'SendMessage', input: { to: 'someone-else', message: 'hi' } }]));
+  check('a message to something that is not one of its agents changes no tab', t.threads.size === 2 && t.threads.get('ag')?.status === 'stopped');
+}
+
+// --- the same, rebuilt from a saved conversation
+{
+  const t = new Transcript();
+  const note = (toolUse: string, status: string) => ({ type: 'user', parent_tool_use_id: null, message: { content: `<task-notification>\n<task-id>T9</task-id>\n<tool-use-id>${toolUse}</tool-use-id>\n<status>${status}</status>\n</task-notification>` } });
+  t.handle(asst([{ type: 'tool_use', id: 'ag', name: 'Agent', input: { description: 'fixer', prompt: 'fix it', run_in_background: true } }]), true);
+  t.handle(toolResult('ag', [{ type: 'text', text: 'Async agent launched successfully. (internal) agentId: T9 (internal ID - do not mention)' }]), true);
+  t.handle(note('ag', 'completed'), true);
+  t.handle(asst([{ type: 'tool_use', id: 'sm', name: 'SendMessage', input: { to: 'T9', message: 'now also do this' } }]), true);
+  check('history: a continued agent is running again', t.threads.get('ag')?.status === 'running' && t.threads.size === 2, [...t.threads.values()]);
+  t.handle(toolResult('sm', '{"success":true}'), true);
+  t.handle(note('sm', 'completed'), true);
+  check('history: its notification (naming the SendMessage call) finishes it', t.threads.get('ag')?.status === 'done' && t.threads.size === 2, t.threads.get('ag'));
+  t.handle(asst([{ type: 'tool_use', id: 'smx', name: 'SendMessage', input: { to: 'T9', message: 'x' } }]), true);
+  t.handle(toolResult('smx', 'No such agent', { message: { content: [{ type: 'tool_result', tool_use_id: 'smx', content: 'No such agent', is_error: true }] } }), true);
+  check('history: a message that was not delivered leaves the agent as it was', t.threads.get('ag')?.status === 'done', t.threads.get('ag'));
+  // The agent's own transcript: its task, its work, then the follow-up in its place.
+  const sub = (m: any) => t.handle({ parent_tool_use_id: 'ag', ...m }, true);
+  sub({ type: 'user', message: { content: 'fix it' } });
+  sub({ type: 'assistant', message: { content: [{ type: 'text', text: 'first report' }] } });
+  sub({ type: 'user', is_meta: true, message: { content: 'The coordinator sent a message while you were working:\nnow also do this\n\nAddress this before completing your current task.' } });
+  sub({ type: 'user', message: { content: '<system-reminder>\nYour final report is delivered to the coordinator.\n</system-reminder>' } });
+  sub({ type: 'user', is_meta: true, message: { content: 'an internal note that is not a follow-up' } });
+  sub({ type: 'assistant', message: { content: [{ type: 'text', text: 'second report' }] } });
+  const kinds = (t.items.get('ag') ?? []).map((i) => (i.kind === 'prompt' ? (i.followUp ? `follow-up:${i.text}` : 'task') : i.kind === 'text' ? i.text : i.kind));
+  check('history: the follow-up sits between the two reports, without its wrapper', kinds.join(' | ') === 'task | first report | follow-up:now also do this | second report', kinds);
+  // A compacted conversation is saved as a summary in place of what came before.
+  const c = new Transcript();
+  c.handle({ type: 'user', isCompactSummary: true, parent_tool_use_id: null, message: { content: 'This session is being continued from a previous conversation. '.repeat(50) } }, true);
+  c.handle({ type: 'user', is_meta: true, parent_tool_use_id: null, message: { content: 'Another session sent a message: a long report' } }, true);
+  c.handle({ type: 'user', uuid: 'u', parent_tool_use_id: null, message: { content: 'next question' } }, true);
+  const shown = c.items.get('main') ?? [];
+  check('history: a compaction summary is a short notice, and system notes are not shown as your messages', shown.length === 2 && shown[0].kind === 'notice' && shown[1].kind === 'user' && shown[1].text === 'next question', shown.map((i) => i.kind));
+}
+
 // --- history: images, uuids and fork points
 {
   const t = new Transcript();

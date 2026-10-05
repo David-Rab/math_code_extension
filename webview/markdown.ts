@@ -219,16 +219,21 @@ md.renderer.rules.image = (tokens, idx) => {
 };
 
 const htmlCache = new Map<string, string>();
-/** Render markdown to HTML. Finished messages are cached; drafts pass cache=false. */
-export function renderMarkdown(src: string, cache = true): string {
+/**
+ * Render markdown to HTML. Finished messages are cached; drafts pass cache=false.
+ * `breaks` keeps every single line break as a line break (for text the user typed).
+ */
+export function renderMarkdown(src: string, cache = true, breaks = false): string {
+  const key = breaks ? `\u0001${src}` : src;
   if (cache) {
-    const hit = htmlCache.get(src);
+    const hit = htmlCache.get(key);
     if (hit !== undefined) return hit;
   }
+  md.set({ breaks });
   const html = md.render(src);
   if (cache) {
     if (htmlCache.size > 2000) htmlCache.clear();
-    htmlCache.set(src, html);
+    htmlCache.set(key, html);
   }
   return html;
 }

@@ -627,7 +627,7 @@ const ItemView = memo(function ItemView({ item, config }: { item: Item; config: 
     case 'prompt':
       return (
         <details class="prompt" open={item.text.length < 600}>
-          <summary>Task given by the main agent</summary>
+          <summary>{item.followUp ? 'Follow-up message to this agent' : 'Task given by the main agent'}</summary>
           <Markdown text={item.text} math={config.renderMath} />
         </details>
       );
@@ -711,7 +711,7 @@ function UserMessage({ item, math }: { item: Extract<Item, { kind: 'user' }>; ma
           ))}
         </div>
       )}
-      {item.text && <Markdown text={item.text} math={math} />}
+      {item.text && <Markdown text={item.text} math={math} breaks />}
       {item.uuid && (
         <button
           class="rewind"
@@ -742,8 +742,9 @@ function UserMessage({ item, math }: { item: Extract<Item, { kind: 'user' }>; ma
   );
 }
 
-const Markdown = ({ text, math }: { text: string; math: boolean }) => {
-  const html = useMemo(() => renderMarkdown(text), [text, math]);
+// `breaks`: every line break you typed is kept (your own messages); Claude's replies follow Markdown, where a single one is a space.
+const Markdown = ({ text, math, breaks = false }: { text: string; math: boolean; breaks?: boolean }) => {
+  const html = useMemo(() => renderMarkdown(text, true, breaks), [text, math, breaks]);
   return <div class="md" dangerouslySetInnerHTML={{ __html: html }} />;
 };
 
@@ -937,8 +938,14 @@ function Composer({ status, thread, config }: { status: Status; thread: ThreadMe
 
   useLayoutEffect(() => {
     const el = ref.current!;
+    // Measuring collapses the box for a moment, which makes the conversation above taller and
+    // lets the browser pull its scroll position back. Keep the conversation's bottom line where
+    // it was, so typing a second line neither moves what you are reading under the box nor jumps.
+    const thread = document.querySelector<HTMLElement>('.thread');
+    const fromBottom = thread ? thread.scrollHeight - thread.clientHeight - thread.scrollTop : 0;
     el.style.height = 'auto';
     el.style.height = Math.min(el.scrollHeight, 300) + 'px';
+    if (thread) thread.scrollTop = thread.scrollHeight - thread.clientHeight - fromBottom;
   }, [text]);
 
   const update = (v: string) => {

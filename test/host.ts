@@ -8,6 +8,7 @@ import { openLink } from '../src/links';
 import { cleanLastUsed, initPrefs, lastUsed, rememberLastUsed, onLastUsedChange } from '../src/prefs';
 import { launchSettings, buildOptions } from '../src/session';
 import { reportBody } from '../src/report';
+import { arrange, cleanGroupName, cleanOrganizer, forget, groupNames, initOrganizer, organizer, renameGroup, setGroup, setPinned } from '../src/organize';
 import { Transcript } from '../src/transcript';
 
 let failed = 0;
@@ -92,6 +93,35 @@ Object.assign(settings, { initialModel: '', initialPermissionMode: 'bypassPermis
 check('an unsafe mode in the settings is ignored', launchSettings().permissionMode === 'auto', launchSettings());
 check('an unsafe mode is never a launch option', launchSettings({ permissionMode: 'bypassPermissions' }).permissionMode === undefined && buildOptions(proj, () => undefined, {}, { permissionMode: 'bypassPermissions' }).permissionMode === undefined);
 Object.assign(settings, { initialPermissionMode: '' });
+
+// --- pinned sessions and groups ---------------------------------------------
+{
+  const id = (n: number) => `00000000-0000-4000-8000-00000000000${n}`;
+  const list = [1, 2, 3, 4, 5].map((n) => ({ id: id(n), title: `s${n}` })); // most recent first
+  const o = cleanOrganizer({ pins: [id(4), id(2), 'not-an-id', id(4), 7], groups: { [id(1)]: '  Thesis  ', [id(3)]: 'admin', [id(4)]: 'admin', bogus: 'x', [id(5)]: '   ' }, extra: true });
+  check('stored pins and groups are cleaned', JSON.stringify(o.pins) === JSON.stringify([id(4), id(2)]) && JSON.stringify(o.groups) === JSON.stringify({ [id(1)]: 'Thesis', [id(3)]: 'admin', [id(4)]: 'admin' }), o);
+  const a = arrange(list, o);
+  check('pinned sessions come first, in the order pinned', a.pinned.map((s) => s.title).join() === 's4,s2', a.pinned);
+  check('groups follow by name; a pinned session is listed once', a.groups.map((g) => `${g.name}:${g.sessions.map((s) => s.title).join('+')}`).join() === 'admin:s3,Thesis:s1', a.groups);
+  check('the rest keeps its order', a.rest.map((s) => s.title).join() === 's5', a.rest);
+  check('nothing is lost or doubled', a.pinned.length + a.groups.reduce((n, g) => n + g.sessions.length, 0) + a.rest.length === list.length);
+  check('a group name is trimmed and bounded', cleanGroupName('  a   b  ') === 'a b' && cleanGroupName('x'.repeat(99))!.length === 40 && cleanGroupName('   ') === undefined && cleanGroupName(5) === undefined);
+
+  const mem: Record<string, unknown> = {};
+  initOrganizer({ get: (k: string) => mem[k], update: async (k: string, v: unknown) => void (mem[k] = v), keys: () => Object.keys(mem) } as any);
+  setPinned(id(1), true);
+  setPinned(id(2), true);
+  setGroup(id(2), 'Thesis');
+  setGroup(id(3), 'Thesis');
+  check('pin and group are stored', JSON.stringify(mem['claudePanel.sessionOrganizer']) === JSON.stringify({ pins: [id(1), id(2)], groups: { [id(2)]: 'Thesis', [id(3)]: 'Thesis' } }), mem);
+  renameGroup('Thesis', 'Paper');
+  check('renaming a group moves all its sessions', groupNames().join() === 'Paper' && organizer().groups[id(3)] === 'Paper');
+  setPinned(id(1), false);
+  forget(id(2));
+  check('unpinning and deleting leave nothing behind', organizer().pins.length === 0 && JSON.stringify(organizer().groups) === JSON.stringify({ [id(3)]: 'Paper' }), organizer());
+  renameGroup('Paper', undefined);
+  check('removing a group keeps its sessions, ungrouped', groupNames().length === 0 && arrange(list, organizer()).rest.length === 5);
+}
 
 // --- problem report ---------------------------------------------------------
 {

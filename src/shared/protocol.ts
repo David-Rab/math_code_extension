@@ -41,7 +41,7 @@ export type Item =
   | { kind: 'thinking'; id: string; text: string }
   | { kind: 'tools'; id: string; tools: ToolCall[] }
   | { kind: 'agent'; id: string; threadId: string; title: string; agentType?: string }
-  | { kind: 'prompt'; id: string; text: string } // the task a subagent was given
+  | { kind: 'prompt'; id: string; text: string; followUp?: boolean } // the task a subagent was given, or a later message to it
   | {
       kind: 'permission';
       id: string;

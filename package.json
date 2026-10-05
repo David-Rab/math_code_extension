@@ -90,6 +90,36 @@
         "title": "Report a Problem…",
         "category": "MathPanel",
         "icon": "$(report)"
+      },
+      {
+        "command": "claudePanel.pinSession",
+        "title": "Pin Session",
+        "category": "MathPanel",
+        "icon": "$(pin)"
+      },
+      {
+        "command": "claudePanel.unpinSession",
+        "title": "Unpin Session",
+        "category": "MathPanel",
+        "icon": "$(pinned)"
+      },
+      {
+        "command": "claudePanel.moveSessionToGroup",
+        "title": "Move Session to Group…",
+        "category": "MathPanel",
+        "icon": "$(folder)"
+      },
+      {
+        "command": "claudePanel.renameGroup",
+        "title": "Rename Group…",
+        "category": "MathPanel",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "claudePanel.removeGroup",
+        "title": "Remove Group (keeps its sessions)",
+        "category": "MathPanel",
+        "icon": "$(close)"
       }
     ],
     "viewsContainers": {
@@ -130,28 +160,76 @@
       "view/item/context": [
         {
           "command": "claudePanel.renameSession",
-          "when": "view == claudePanel.sessions && viewItem == session",
+          "when": "view == claudePanel.sessions && viewItem =~ /^session/",
           "group": "inline@1"
         },
         {
           "command": "claudePanel.forkSession",
-          "when": "view == claudePanel.sessions && viewItem == session",
+          "when": "view == claudePanel.sessions && viewItem =~ /^session/",
           "group": "1_session@2"
         },
         {
           "command": "claudePanel.renameSession",
-          "when": "view == claudePanel.sessions && viewItem == session",
+          "when": "view == claudePanel.sessions && viewItem =~ /^session/",
           "group": "1_session@1"
         },
         {
           "command": "claudePanel.deleteSession",
-          "when": "view == claudePanel.sessions && viewItem == session",
+          "when": "view == claudePanel.sessions && viewItem =~ /^session/",
           "group": "9_delete@1"
+        },
+        {
+          "command": "claudePanel.pinSession",
+          "when": "view == claudePanel.sessions && viewItem == session",
+          "group": "inline@0"
+        },
+        {
+          "command": "claudePanel.unpinSession",
+          "when": "view == claudePanel.sessions && viewItem == session.pinned",
+          "group": "inline@0"
+        },
+        {
+          "command": "claudePanel.pinSession",
+          "when": "view == claudePanel.sessions && viewItem == session",
+          "group": "2_organize@1"
+        },
+        {
+          "command": "claudePanel.unpinSession",
+          "when": "view == claudePanel.sessions && viewItem == session.pinned",
+          "group": "2_organize@1"
+        },
+        {
+          "command": "claudePanel.moveSessionToGroup",
+          "when": "view == claudePanel.sessions && viewItem =~ /^session/",
+          "group": "2_organize@2"
+        },
+        {
+          "command": "claudePanel.renameGroup",
+          "when": "view == claudePanel.sessions && viewItem == group",
+          "group": "inline@1"
+        },
+        {
+          "command": "claudePanel.renameGroup",
+          "when": "view == claudePanel.sessions && viewItem == group",
+          "group": "1_group@1"
+        },
+        {
+          "command": "claudePanel.removeGroup",
+          "when": "view == claudePanel.sessions && viewItem == group",
+          "group": "1_group@2"
         }
       ],
       "commandPalette": [
         {
           "command": "claudePanel.newSessionTab",
+          "when": "false"
+        },
+        {
+          "command": "claudePanel.renameGroup",
+          "when": "false"
+        },
+        {
+          "command": "claudePanel.removeGroup",
           "when": "false"
         }
       ],

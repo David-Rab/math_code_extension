@@ -2,6 +2,7 @@
 // real claude.exe with a fake VS Code, and checks what the panel would show.
 // Usage: npm run e2e -- <scratch work dir>
 import * as fs from 'node:fs';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import * as zlib from 'node:zlib';
 import { getSessionMessages, getSessionInfo, renameSession, deleteSession } from '@anthropic-ai/claude-agent-sdk';
@@ -204,6 +205,15 @@ for (let i = 0; i < 60 && !opened.length; i++) await sleep(250);
 const fork = opened[0];
 check('fork opens a new session with your message ready to edit', !!fork?.id && fork.prefill === essayMsg.text, JSON.stringify(opened));
 if (fork?.id) {
+  // The fork was written a moment ago, by this window: it must open as an ordinary session.
+  const panelF = new FakePanel();
+  const sF = new ChatSession(panelF as any, work, warm, host, fork.id);
+  await sF.start();
+  panelF.fromView({ t: 'ready' });
+  check('a fresh fork is not taken for a conversation open in another window', !items(sF).some((i: any) => i.kind === 'notice' && /another window/.test(i.text)), JSON.stringify(items(sF).filter((i: any) => i.kind === 'notice')));
+  check('…so it is not held back from starting', (sF as any).activeElsewhere === false);
+  panelF.dispose();
+  await sleep(1000);
   const orig = await getSessionMessages(s.status.sessionId!, { dir: work });
   const forked = await getSessionMessages(fork.id, { dir: work });
   check('fork contains the conversation up to that message only', forked.length > 0 && forked.length < orig.length, `${forked.length} vs ${orig.length}`);
@@ -217,6 +227,17 @@ if (fork?.id) {
 const sessionId = s.status.sessionId!;
 panel.dispose();
 await sleep(1000);
+// Closed here a moment ago and untouched since: reopening it is not "open in another window".
+const panelR = new FakePanel();
+const sR = new ChatSession(panelR as any, work, warm, host, sessionId);
+await sR.start();
+check('a conversation this window just closed reopens without the warning', !items(sR).some((i: any) => i.kind === 'notice' && /another window/.test(i.text)));
+panelR.dispose();
+// Something else writes to it afterwards (as another window would): now the warning is due.
+await sleep(4500);
+const projects = path.join(os.homedir(), '.claude', 'projects');
+const saved = fs.readdirSync(projects).map((d) => path.join(projects, d, `${sessionId}.jsonl`)).find((f) => fs.existsSync(f));
+if (saved) fs.utimesSync(saved, new Date(), new Date());
 const panel2 = new FakePanel();
 const s2 = new ChatSession(panel2 as any, work, warm, host, sessionId);
 await s2.start();

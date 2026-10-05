@@ -81,6 +81,8 @@ export class Transcript {
   private pendingTaskCreates = new Map<string, { threadId: string; tempId: string }>();
   /** Running foreground tasks that are not agents, kept in case they move to the background. */
   private quietTasks = new Map<string, any>();
+  /** SendMessage calls that continue an agent, until their result arrives: which tab, and its status before. */
+  private resumes = new Map<string, { threadId: string; status: ThreadMeta['status'] }>();
   /** uuid of the latest main-thread message: the fork point for the next user message. */
   private lastUuid: string | undefined;
   private seq = 0;
@@ -160,8 +162,14 @@ export class Transcript {
   /** The task a subagent was given, shown once at the top of its tab. */
   private addPrompt(threadId: string, prompt: unknown) {
     if (typeof prompt !== 'string' || !prompt) return;
-    if (this.items.get(threadId)?.some((x) => x.kind === 'prompt')) return;
+    if (this.items.get(threadId)?.some((x) => x.kind === 'prompt' && !x.followUp)) return;
     this.put(threadId, { kind: 'prompt', id: this.nextId('p'), text: prompt });
+  }
+
+  /** A later message to an agent that is already running or has finished: it continues in the same tab. */
+  private addFollowUp(threadId: string, text: unknown) {
+    if (typeof text !== 'string' || !text.trim()) return;
+    this.put(threadId, { kind: 'prompt', id: this.nextId('p'), text, followUp: true });
   }
 
   private setDraft(threadId: string, text: string | null) {
@@ -195,7 +203,7 @@ export class Transcript {
         this.onStreamEvent(m);
         return {};
       case 'assistant':
-        return this.onAssistant(m);
+        return this.onAssistant(m, history);
       case 'user':
         this.onUser(m, history);
         return {};
@@ -226,7 +234,7 @@ export class Transcript {
       this.setDraft(threadId, (this.drafts.get(threadId) ?? '') + ev.delta.text);
   }
 
-  private onAssistant(m: any): HandleResult {
+  private onAssistant(m: any, history: boolean): HandleResult {
     const threadId = this.threadOf(m.parent_tool_use_id);
     if (threadId !== 'main') this.noteUsage(threadId, m.message);
     const content = Array.isArray(m.message?.content) ? m.message.content : [];
@@ -237,7 +245,7 @@ export class Transcript {
       } else if (b.type === 'thinking') {
         if (b.thinking?.trim()) this.put(threadId, { kind: 'thinking', id: this.nextId('k'), text: b.thinking });
       } else if (b.type === 'tool_use') {
-        this.onToolUse(threadId, b, m);
+        this.onToolUse(threadId, b, m, history);
       }
     }
     if (m.error && AUTH_ERRORS.has(m.error)) return { auth: m.error };
@@ -255,7 +263,24 @@ export class Transcript {
     this.updateThread(threadId, patch);
   }
 
-  private onToolUse(threadId: string, b: any, m: any) {
+  /**
+   * SendMessage to an agent started earlier makes that same agent run again.
+   * Its replies keep arriving under the original Agent call, so it stays in
+   * its tab: no new tab, and the message is shown there as a follow-up.
+   */
+  private onSendMessage(b: any, history: boolean) {
+    const target = this.taskToThread.get(String(b.input?.to ?? ''));
+    const thread = target ? this.threads.get(target) : undefined;
+    if (!thread) return;
+    this.resumes.set(b.id, { threadId: thread.id, status: thread.status });
+    // Live, task_started follows and the message is shown now. A stored transcript has only
+    // this call, and the agent's own transcript holds the message in its place.
+    if (history) this.updateThread(thread.id, { status: 'running' });
+    else this.addFollowUp(thread.id, b.input?.message);
+  }
+
+  private onToolUse(threadId: string, b: any, m: any, history: boolean) {
+    if (b.name === 'SendMessage') this.onSendMessage(b, history);
     if (AGENT_TOOLS.has(b.name)) {
       const input = b.input ?? {};
       const title = input.description || input.name || 'Subagent';
@@ -373,18 +398,42 @@ export class Transcript {
     }
     const note = text.match(/^<task-notification>[\s\S]*?<tool-use-id>([^<]+)<\/tool-use-id>[\s\S]*?<status>([^<]+)<\/status>/);
     if (note) {
-      if (this.threads.has(note[1])) this.updateThread(note[1], { status: mapTaskStatus(note[2]) }, ts(m));
+      // A continued agent's notification names the SendMessage call; its task id still leads to its tab.
+      const task = text.match(/<task-id>([^<]+)<\/task-id>/)?.[1];
+      const id = this.threads.has(note[1]) ? note[1] : task ? this.taskToThread.get(task) : undefined;
+      if (id) this.updateThread(id, { status: mapTaskStatus(note[2]), activity: undefined }, ts(m));
       return;
     }
-    if (m.isSynthetic || m.isMeta || /^<(command-name|command-message|system-reminder|task-notification)/.test(text)) return;
-    // Live, the view already shows what you typed. A subagent's first user
-    // message is its task, shown from the Agent call instead.
-    if (!history || threadId !== 'main') return;
+    if (m.isCompactSummary) {
+      // The summary that replaced the earlier conversation (a saved transcript holds it as a user message).
+      if (history) this.notice(threadId, 'info', threadId === 'main' ? 'Conversation compacted.' : "This agent's earlier conversation was compacted; what is saved starts here.");
+      return;
+    }
+    // A later message from the main agent, as the subagent's own saved transcript holds it.
+    const followUp = threadId !== 'main' && text.match(/^The coordinator sent a message[^\n]*:\n([\s\S]*?)(?:\n\nAddress this before completing your current task\.)?$/);
+    if (followUp) {
+      if (history) this.addFollowUp(threadId, followUp[1]);
+      return;
+    }
+    if (m.isSynthetic || m.isMeta || m.is_meta || /^<(command-name|command-message|system-reminder|task-notification)/.test(text)) return;
+    if (threadId !== 'main') {
+      // A subagent's first user message is its task, normally shown from the Agent call.
+      if (history && !this.items.get(threadId)?.length) this.addPrompt(threadId, text);
+      return;
+    }
+    // Live, the view already shows what you typed.
+    if (!history) return;
     this.put('main', { kind: 'user', id: this.nextId('u'), text, uuid: m.uuid, forkPoint: this.lastUuid, images: images.length ? images : undefined });
   }
 
   private onToolResult(b: any, m: any) {
     if (this.onTaskCreated(b.tool_use_id, b, m)) return;
+    const resume = this.resumes.get(b.tool_use_id);
+    if (resume) {
+      this.resumes.delete(b.tool_use_id);
+      // The message was not delivered: the agent is where it was.
+      if (b.is_error) this.updateThread(resume.threadId, { status: resume.status });
+    }
     const ref = this.toolIndex.get(b.tool_use_id);
     if (ref) {
       const item = this.findItem(ref.threadId, ref.itemId);
@@ -398,6 +447,9 @@ export class Transcript {
     if (thread) {
       const launchedAsync = typeof m.tool_use_result === 'object' && m.tool_use_result?.status === 'async_launched';
       const text = resultText(b.content);
+      // The agent's id, by which a later SendMessage or notification refers to it.
+      const agentId = (typeof m.tool_use_result === 'object' && m.tool_use_result?.agentId) || text.match(/\bagentId:\s*([\w-]+)/)?.[1];
+      if (typeof agentId === 'string' && agentId) this.taskToThread.set(agentId, thread.id);
       if (launchedAsync || /^Async agent launched/.test(text)) {
         this.updateThread(thread.id, { background: true });
         return;
@@ -421,7 +473,13 @@ export class Transcript {
         return {};
       case 'task_started': {
         if (!m.tool_use_id || m.skip_transcript) return {};
-        const agent = this.threads.has(m.tool_use_id) || !m.task_type || AGENT_TASKS.has(m.task_type);
+        const known = this.threads.get(this.taskToThread.get(m.task_id) ?? '');
+        if (known) {
+          // An agent continued with a message is the same task started again: it keeps its tab.
+          this.updateThread(known.id, { status: 'running', taskId: m.task_id, background: !!m.is_backgrounded || !!known.background });
+          return {};
+        }
+        const agent =this.threads.has(m.tool_use_id) || !m.task_type || AGENT_TASKS.has(m.task_type);
         if (agent || m.is_backgrounded) this.startTask(m);
         else this.quietTasks.set(m.task_id, m);
         return {};
@@ -440,7 +498,7 @@ export class Transcript {
       }
       case 'task_notification': {
         this.quietTasks.delete(m.task_id);
-        const id = m.tool_use_id || this.taskToThread.get(m.task_id);
+        const id = this.taskToThread.get(m.task_id) ?? m.tool_use_id;
         if (id && this.threads.has(id)) this.updateThread(id, { status: mapTaskStatus(m.status), activity: undefined });
         return {};
       }

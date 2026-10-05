@@ -2,8 +2,8 @@ import * as vscode from 'vscode';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { randomBytes } from 'node:crypto';
-import { listSessions, renameSession, deleteSession, forkSession } from '@anthropic-ai/claude-agent-sdk';
-import { ChatSession, type SessionHost } from './session';
+import { listSessions, renameSession, deleteSession, forkSession, getSessionInfo } from '@anthropic-ai/claude-agent-sdk';
+import { ChatSession, noteWrittenHere, type SessionHost } from './session';
 import { WarmPool } from './warm';
 import { readConfig, log, setBundledExecutable, showLog } from './config';
 import { readBuildInfo, fetchLatest, newer, showChangelog, runUpdate, type Latest } from './updates';
@@ -11,6 +11,7 @@ import { checkAuth, signIn } from './auth';
 import { initTrust } from './trust';
 import { reportProblem, saveReport } from './report';
 import { initPrefs, onLastUsedChange } from './prefs';
+import { arrange, cleanGroupName, forget, groupNames, initOrganizer, organizer, renameGroup, setGroup, setPinned } from './organize';
 
 const VIEW_TYPE = 'claudePanel.chat';
 const sessions = new Set<ChatSession>();
@@ -34,6 +35,7 @@ export function activate(ctx: vscode.ExtensionContext) {
   history = new SessionsView();
   initTrust(ctx.globalState);
   initPrefs(ctx.globalState);
+  initOrganizer(ctx.globalState);
   // New tabs start with the model, effort and mode you picked last: replace a spare started with the old ones.
   onLastUsedChange(() => warm.refresh());
 
@@ -49,6 +51,11 @@ export function activate(ctx: vscode.ExtensionContext) {
     vscode.commands.registerCommand('claudePanel.renameSession', (e?: SessionEntry) => renameCmd(e)),
     vscode.commands.registerCommand('claudePanel.forkSession', (e?: SessionEntry) => forkCmd(e)),
     vscode.commands.registerCommand('claudePanel.deleteSession', (e?: SessionEntry) => deleteCmd(e)),
+    vscode.commands.registerCommand('claudePanel.pinSession', (e?: SessionEntry) => pinCmd(e, true)),
+    vscode.commands.registerCommand('claudePanel.unpinSession', (e?: SessionEntry) => pinCmd(e, false)),
+    vscode.commands.registerCommand('claudePanel.moveSessionToGroup', (e?: SessionEntry) => groupCmd(e)),
+    vscode.commands.registerCommand('claudePanel.renameGroup', (g?: GroupNode) => renameGroupCmd(g)),
+    vscode.commands.registerCommand('claudePanel.removeGroup', (g?: GroupNode) => removeGroupCmd(g)),
     vscode.commands.registerCommand('claudePanel.agentMap', () => lastActive?.panel.webview.postMessage({ t: 'showAgentMap' })),
     vscode.commands.registerCommand('claudePanel.signIn', () => signIn()),
     vscode.commands.registerCommand('claudePanel.reportProblem', () => reportProblem(ctx.extensionPath, lastActive)),
@@ -195,8 +202,29 @@ async function recentSessions(): Promise<SessionEntry[]> {
       log(`listSessions(${dir}): ${(e as Error).message}`);
     }
   }
+  // Pinned and grouped sessions stay listed however old they are.
+  const have = new Set(out.map((s) => s.id));
+  const o = organizer();
+  const kept = [...new Set([...o.pins, ...Object.keys(o.groups)])].filter((id) => !have.has(id));
+  await Promise.all(
+    kept.flatMap((id) =>
+      folders.map(async (dir) => {
+        const key = `${dir}
+${id}`;
+        if (notHere.has(key)) return;
+        try {
+          const s = await getSessionInfo(id, { dir });
+          if (s) out.push({ id: s.sessionId, title: s.customTitle || s.summary || s.firstPrompt || s.sessionId, cwd: dir, modified: s.lastModified });
+          else notHere.add(key); // belongs to another folder, or was deleted
+        } catch {
+          notHere.add(key);
+        }
+      }),
+    ),
+  );
   return out.sort((a, b) => b.modified - a.modified);
 }
+const notHere = new Set<string>();
 
 function ago(ms: number): string {
   const m = Math.round((Date.now() - ms) / 60000);
@@ -234,6 +262,7 @@ async function forkCmd(e?: SessionEntry) {
   const t = await target(e, 'fork');
   if (!t) return;
   const r = await forkSession(t.id, { dir: t.cwd });
+  noteWrittenHere(r.sessionId); // the copy is new and ours: not "open in another window"
   openPanel(r.sessionId, t.cwd);
   history.refresh();
 }
@@ -249,27 +278,87 @@ async function deleteCmd(e?: SessionEntry) {
   if (choice !== 'Delete') return;
   for (const s of [...sessions]) if (s.sessionId === t.id) s.panel.dispose();
   await deleteSession(t.id, { dir: t.cwd });
+  forget(t.id);
   history.refresh();
 }
 
-class SessionsView implements vscode.TreeDataProvider<SessionEntry> {
+function pinCmd(e: SessionEntry | undefined, on: boolean) {
+  return target(e, on ? 'pin' : 'unpin').then((t) => {
+    if (!t) return;
+    setPinned(t.id, on);
+    history.refresh();
+  });
+}
+
+const groupNameBox = (value = '') =>
+  vscode.window.showInputBox({ prompt: 'Group name', value, validateInput: (v) => (cleanGroupName(v) ? null : 'Enter a name') }).then(cleanGroupName);
+
+async function groupCmd(e?: SessionEntry) {
+  const t = await target(e, 'put in a group');
+  if (!t) return;
+  const now = organizer().groups[t.id];
+  const NEW = '$(add) New group…';
+  const NONE = '$(close) No group';
+  const pick = await vscode.window.showQuickPick([...groupNames().map((g) => ({ label: g, description: g === now ? 'current' : '' })), { label: NEW }, ...(now ? [{ label: NONE }] : [])], {
+    placeHolder: `Group for “${t.title}”`,
+  });
+  if (!pick) return;
+  const name = pick.label === NEW ? await groupNameBox() : pick.label === NONE ? undefined : pick.label;
+  if (pick.label === NEW && !name) return;
+  setGroup(t.id, name);
+  history.refresh();
+}
+
+async function renameGroupCmd(g?: GroupNode) {
+  if (!g?.group) return;
+  const name = await groupNameBox(g.group);
+  if (!name || name === g.group) return;
+  renameGroup(g.group, name);
+  history.refresh();
+}
+
+/** Dissolves the group; its sessions go back to the plain list and are not deleted. */
+function removeGroupCmd(g?: GroupNode) {
+  if (!g?.group) return;
+  renameGroup(g.group, undefined);
+  history.refresh();
+}
+
+interface GroupNode {
+  group: string;
+  sessions: SessionEntry[];
+}
+type SessionNode = SessionEntry | GroupNode;
+
+class SessionsView implements vscode.TreeDataProvider<SessionNode> {
   private changed = new vscode.EventEmitter<void>();
   readonly onDidChangeTreeData = this.changed.event;
   refresh() {
     this.changed.fire();
   }
-  getTreeItem(s: SessionEntry): vscode.TreeItem {
+  getTreeItem(s: SessionNode): vscode.TreeItem {
+    if ('group' in s) {
+      const item = new vscode.TreeItem(s.group, vscode.TreeItemCollapsibleState.Expanded);
+      item.id = `group:${s.group}`; // so VS Code remembers whether you collapsed it
+      item.description = String(s.sessions.length);
+      item.iconPath = new vscode.ThemeIcon('folder');
+      item.contextValue = 'group';
+      return item;
+    }
+    const pinned = organizer().pins.includes(s.id);
     const open = [...sessions].some((x) => x.sessionId === s.id);
     const item = new vscode.TreeItem(s.title, vscode.TreeItemCollapsibleState.None);
     item.description = (open ? 'open · ' : '') + ago(s.modified);
     item.tooltip = `${s.title}\n${new Date(s.modified).toLocaleString()}\n${s.cwd}`;
-    item.iconPath = new vscode.ThemeIcon(open ? 'comment-discussion' : 'comment');
-    item.contextValue = 'session';
+    item.iconPath = new vscode.ThemeIcon(pinned ? 'pinned' : open ? 'comment-discussion' : 'comment');
+    item.contextValue = pinned ? 'session.pinned' : 'session';
     item.command = { command: 'claudePanel.openSession', title: 'Open', arguments: [s] };
     return item;
   }
-  getChildren(): Promise<SessionEntry[]> {
-    return recentSessions();
+  async getChildren(node?: SessionNode): Promise<SessionNode[]> {
+    if (node) return 'group' in node ? node.sessions : [];
+    const a = arrange(await recentSessions(), organizer());
+    return [...a.pinned, ...a.groups.map((g) => ({ group: g.name, sessions: g.sessions })), ...a.rest];
   }
 }
 

@@ -47,6 +47,20 @@ export interface SessionHooks {
 /** A saved conversation updated more recently than this is probably still open somewhere else. */
 const ACTIVE_ELSEWHERE_MS = 5 * 60_000;
 
+/**
+ * Conversations this window itself wrote last: one it just forked, or one whose
+ * panel it just closed. A recent change up to that moment is our own, not a
+ * sign that the conversation is open somewhere else.
+ */
+const lastWrittenHere = new Map<string, number>();
+export function noteWrittenHere(sessionId: string | undefined) {
+  if (sessionId) lastWrittenHere.set(sessionId, Date.now());
+}
+function writtenOnlyHere(sessionId: string, lastModified: number | undefined): boolean {
+  const ours = lastWrittenHere.get(sessionId);
+  return ours !== undefined && lastModified !== undefined && lastModified <= ours + 3000;
+}
+
 /** Permission modes the panel will ever set. Never bypassPermissions. */
 const SAFE_MODES = new Set(['default', 'acceptEdits', 'plan', 'auto', 'dontAsk']);
 
@@ -230,7 +244,7 @@ export class ChatSession {
       for (const t of this.transcript.threads.values())
         if (t.status === 'running' && t.id !== 'main') this.transcript.updateThread(t.id, { status: 'unknown', endedAt: undefined });
       const age = info?.lastModified ? Date.now() - info.lastModified : Infinity;
-      if (age < ACTIVE_ELSEWHERE_MS) {
+      if (age < ACTIVE_ELSEWHERE_MS && !writtenOnlyHere(id, info?.lastModified)) {
         this.activeElsewhere = true;
         this.transcript.updateThread('main', { status: 'unknown' });
         const ago = age < 60_000 ? 'less than a minute ago' : `${Math.round(age / 60_000)} minutes ago`;
@@ -829,6 +843,7 @@ export class ChatSession {
       let forkId: string | undefined;
       if (item.forkPoint && this.sessionId) {
         forkId = (await forkSession(this.sessionId, { dir: this.cwd, upToMessageId: item.forkPoint })).sessionId;
+        noteWrittenHere(forkId);
       }
       this.host.openSession(forkId, this.cwd, item.text);
       this.host.sessionsChanged();
@@ -874,6 +889,8 @@ export class ChatSession {
     for (const [, p] of this.pending) p.resolve({ behavior: 'deny', message: 'Panel closed.' });
     this.pending.clear();
     this.wake?.();
+    // Only a panel that ran the conversation wrote to it (one that just showed it did not).
+    if (this.q) noteWrittenHere(this.sessionId);
     try {
       this.q?.close();
     } catch {

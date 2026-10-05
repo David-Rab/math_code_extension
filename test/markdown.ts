@@ -52,5 +52,13 @@ const raw = renderMarkdown('Raw $x_1$ here', false);
 const rawOk = raw.includes('tex-raw') && raw.includes('$x_1$') && !raw.includes('katex');
 if (!rawOk) failed++;
 console.log(`${rawOk ? 'PASS' : 'FAIL'}  math off shows source`);
+setRenderMath(true);
+// Your own messages keep every line break you typed; replies follow Markdown (a single break is a space).
+const typed = 'first line\nsecond line\n\nnew paragraph with $x^2$';
+const kept = renderMarkdown(typed, true, true);
+const reply = renderMarkdown(typed);
+const breaksOk = /first line<br>\s*second line/.test(kept) && kept.includes('class="katex"') && !reply.includes('<br>') && renderMarkdown(typed, true, true) === kept && renderMarkdown(typed) === reply;
+if (!breaksOk) failed++;
+console.log(`${breaksOk ? 'PASS' : 'FAIL'}  line breaks kept in your messages, not in replies`);
 console.log(failed ? `\n${failed} failed` : '\nall passed');
 process.exit(failed ? 1 : 0);
