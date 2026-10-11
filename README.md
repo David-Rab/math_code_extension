@@ -45,6 +45,14 @@ and adds a clean conversation view, a tab per subagent, and rendered math.
 - **Math:** KaTeX for `$…$`, `$$…$$`, `\(…\)`, `\[…\]` and `align`-style
   environments; ∑ toggles to source. `\F \Q \C \E` built in, more via the
   `mathMacros` setting.
+- **A paper's own macros:** when a formula uses a macro KaTeX does not know, its
+  `\newcommand` / `\DeclareMathOperator` / `\def` is looked up in the project's
+  `.tex` and `.sty` files and the formula is drawn again. The files Claude read
+  in that conversation (and what they `\input`) decide; otherwise a definition
+  is used only if the whole project agrees on it, so contradicting definitions
+  are never guessed between. Nothing is read until a formula needs it, Claude
+  is not told, and the ∑ tooltip lists what was taken from where
+  (`projectMacros` setting; off in Restricted Mode).
 - **Copy as Markdown:** selecting text in the conversation and pressing Ctrl+C
   copies exactly the selection as Markdown source (headings, lists, tables,
   emphasis, links, code, and each formula as the LaTeX it was written with), so
@@ -139,6 +147,7 @@ in full, and the panel log.
 | `src/auth.ts`, `src/trust.ts` | sign-in and folder trust via Claude Code |
 | `src/notify.ts`, `src/report.ts`, `src/updates.ts` | notifications, problem reports, updates |
 | `src/links.ts`, `src/prefs.ts`, `src/organize.ts` | opening links from replies; the model, effort and mode remembered for new tabs; session pins and groups |
+| `src/macros.ts`, `src/compactions.ts` | a paper's own LaTeX macros from the project's TeX files; compaction counts from saved conversations |
 | `webview/` | the panel UI (Preact), Markdown + KaTeX renderer, styles |
 | `test/` | replay, unit, host (fake VS Code), renderer, e2e, trust e2e, benchmark harness |
 

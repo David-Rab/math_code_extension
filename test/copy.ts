@@ -21,9 +21,12 @@ if (process.env.COPY_EXTRA) for (const [i, text] of (JSON.parse(fs.readFileSync(
 const partial = 'Start of para with $a^2+b^2$ inside and **bold words** after.\n\n- item one\n- item two\n- item three\n\n3. third\n4. fourth\n5. fifth\n\n```js\nconst x = 1;\nconst y = 2;\n```\n\n| A | B |\n|---|--:|\n| a1 | b1 |\n| a2 | b2 |';
 const mine = 'line one\nline two\n\nnew paragraph with $x^2$';
 
+// A reply written with a paper's own macros: the page asks the host for them once and draws again.
+const usesMacros = 'The map is $\\equi P_k$, for sets in $\\Fam$, and $\\Zed$ is contested. Again $\\equi$ and $\\Fam$.';
+
 const snapshot = {
   threads: [{ id: 'main', title: 'Main', status: 'done' }],
-  items: { main: [...samples.map(([, text], i) => ({ kind: 'text', id: `s${i}`, text })), { kind: 'text', id: 'partial', text: partial }, { kind: 'user', id: 'mine', text: mine }] },
+  items: { main: [...samples.map(([, text], i) => ({ kind: 'text', id: `s${i}`, text })), { kind: 'text', id: 'partial', text: partial }, { kind: 'user', id: 'mine', text: mine }, { kind: 'text', id: 'macros', text: usesMacros }] },
   drafts: {},
   todos: {},
   status: { models: [], commands: [], remote: { state: 'off' }, busy: false, starting: false, sessionId: 'demo' },
@@ -34,7 +37,9 @@ const snapshot = {
 async function inPage(snap: unknown, sampleCount: number) {
   const frame = () => new Promise<void>((r) => requestAnimationFrame(() => r()));
   window.postMessage({ t: 'snapshot', snapshot: snap }, '*');
-  for (let i = 0; i < 400 && document.querySelectorAll('.msg').length < sampleCount + 2; i++) await frame();
+  for (let i = 0; i < 400 && document.querySelectorAll('.msg').length < sampleCount + 3; i++) await frame();
+  // The host's answer about macros arrives a moment after the first drawing.
+  await new Promise((r) => setTimeout(r, 400));
   for (let i = 0; i < 5; i++) await frame();
 
   const copy = (range: Range): string | null => {
@@ -95,7 +100,15 @@ async function inPage(snap: unknown, sampleCount: number) {
     'two messages at once': between(document.querySelector('.thread')!, 'fifth', 'line one'),
     'the message box is left to the browser': fromBox.defaultPrevented ? 'taken over' : null,
   };
-  document.getElementById('perf')!.textContent = JSON.stringify({ errors: (window as any).__errors, whole, parts });
+  const withMacros = replies[replies.length - 1];
+  const macros = {
+    requests: (window as any).__requests as string[][],
+    undefinedLeft: [...withMacros.innerHTML.matchAll(/color:#cc0000;?">\\([A-Za-z]+)</g)].map((m) => m[1]),
+    formulas: withMacros.querySelectorAll('.katex').length,
+    copied: all(withMacros),
+    tooltip: [...document.querySelectorAll('.statusbar .toggle')].map((b) => b.getAttribute('title') ?? '').find((t) => t.startsWith('Render LaTeX math')) ?? '',
+  };
+  document.getElementById('perf')!.textContent = JSON.stringify({ errors: (window as any).__errors, whole, parts, macros });
 }
 
 const out = '.test/harness/copy.html';
@@ -107,10 +120,20 @@ fs.writeFileSync(
 <body><div id="root"></div><pre id="perf" style="display:none"></pre>
 <script>
 window.__errors = [];
+// The host's side of the macro lookup: knows two macros, and reports one the project disagrees on.
+window.__requests = [];
+const KNOWN = { equi: '\\\\cong', Fam: '\\\\mathcal C' };
+function answerMacros(names) {
+  window.__requests.push(names);
+  const macros = Object.fromEntries(names.filter((n) => n in KNOWN).map((n) => [n, KNOWN[n]]));
+  const sources = Object.fromEntries(Object.keys(macros).map((n) => [n, 'paper/paper.tex']));
+  const unresolved = names.includes('Zed') ? { Zed: 'defined in 2 different ways across 3 files' } : {};
+  setTimeout(() => window.postMessage({ t: 'macros', macros, sources, unresolved }, '*'), 20);
+}
 window.onerror = (m) => { window.__errors.push(String(m)); };
 const inPage = ${inPage.toString()};
 window.acquireVsCodeApi = () => ({
-  postMessage(m) { if (m.t === 'ready') inPage(${JSON.stringify(snapshot).replace(/</g, '\\u003c')}, ${samples.length}).catch((e) => { document.getElementById('perf').textContent = JSON.stringify({ errors: [String(e && e.stack || e)], whole: [], parts: {} }); }); },
+  postMessage(m) { if (m.t === 'findMacros') answerMacros(m.names); if (m.t === 'ready') inPage(${JSON.stringify(snapshot).replace(/</g, '\\u003c')}, ${samples.length}).catch((e) => { document.getElementById('perf').textContent = JSON.stringify({ errors: [String(e && e.stack || e)], whole: [], parts: {} }); }); },
   getState() { return {}; },
   setState() {},
 });
@@ -118,7 +141,12 @@ window.acquireVsCodeApi = () => ({
 <script src="${rel('main.js')}"></script></body></html>`,
 );
 
-const report = JSON.parse(execFileSync(process.execPath, ['test/cdp.mjs', out], { encoding: 'utf8' }).split('\n')[0]) as { errors: string[]; whole: (string | null)[]; parts: Record<string, string | null> };
+const report = JSON.parse(execFileSync(process.execPath, ['test/cdp.mjs', out], { encoding: 'utf8' }).split('\n')[0]) as {
+  errors: string[];
+  whole: (string | null)[];
+  parts: Record<string, string | null>;
+  macros: { requests: string[][]; undefinedLeft: string[]; formulas: number; copied: string | null; tooltip: string };
+};
 let failed = 0;
 const check = (name: string, ok: boolean, detail?: unknown) => {
   if (!ok) failed++;
@@ -148,5 +176,12 @@ const expected: Record<string, string | null> = {
 for (const [name, want] of Object.entries(expected)) check(`selection: ${name}`, report.parts[name] === want, `copied: ${JSON.stringify(report.parts[name])}`);
 const two = report.parts['two messages at once'] ?? '';
 check('selection: two messages at once, without the buttons between them', two.startsWith('5. fifth\n\n```js\nconst x = 1;') && two.endsWith('| a2 | b2 |\n\nline one') && !/[⧉↶]/.test(two), `copied: ${JSON.stringify(two)}`);
+const m = report.macros;
+const asked = m.requests.flat();
+check("a paper's macros: each unknown name is asked for once", ['equi', 'Fam', 'Zed'].every((n) => asked.filter((x) => x === n).length === 1), m.requests);
+check('…nothing is asked about standard LaTeX', !asked.some((n) => ['alpha', 'int', 'frac', 'sum', 'tfrac', 'pi'].includes(n)), m.requests);
+check('…the formulas are drawn again with the definitions found', m.formulas === 5 && JSON.stringify(m.undefinedLeft) === '["Zed"]', m);
+check('…copying still gives the source as written', m.copied === usesMacros, m.copied);
+check('…the math toggle says where they came from and what was left alone', m.tooltip.includes('\\equi \\Fam  (paper/paper.tex)') && m.tooltip.includes('\\Zed: defined in 2 different ways'), m.tooltip);
 console.log(failed ? `\n${failed} failed` : '\nall passed');
 process.exit(failed ? 1 : 0);

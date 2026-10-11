@@ -204,6 +204,17 @@ const toolResult = (id: string, content: any, extra: any = {}) => ({ type: 'user
   check('history: a compaction summary is a short notice, and system notes are not shown as your messages', shown.length === 2 && shown[0].kind === 'notice' && shown[1].kind === 'user' && shown[1].text === 'next question', shown.map((i) => i.kind));
 }
 
+// --- the TeX files a conversation worked with (where a paper's own macros are looked up first)
+{
+  const t = new Transcript();
+  t.handle(asst([{ type: 'tool_use', id: 'r1', name: 'Read', input: { file_path: 'C:\\work\\paper\\paper.tex' } }]), true);
+  t.handle(asst([{ type: 'tool_use', id: 'r2', name: 'Read', input: { file_path: 'C:\\work\\paper\\notes.md' } }]));
+  t.handle(asst([{ type: 'tool_use', id: 'e1', name: 'Edit', input: { file_path: 'C:\\work\\paper\\part1.tex', old_string: 'a', new_string: 'b' } }]));
+  t.handle(asst([{ type: 'tool_use', id: 'g1', name: 'Grep', input: { pattern: 'x', path: 'C:\\work\\paper\\macros.sty' } }], { parent_tool_use_id: null }));
+  t.handle(asst([{ type: 'tool_use', id: 'r3', name: 'Read', input: { file_path: 'C:\\work\\paper\\paper.tex' } }]));
+  check('TeX files read or edited are remembered, most recent first, once each', JSON.stringify(t.texFiles()) === JSON.stringify(['C:\\work\\paper\\paper.tex', 'C:\\work\\paper\\macros.sty', 'C:\\work\\paper\\part1.tex']), t.texFiles());
+}
+
 // --- compactions are counted; events new in Claude Code 2.1.296
 {
   const t = new Transcript();

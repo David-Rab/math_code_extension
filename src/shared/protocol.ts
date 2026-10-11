@@ -126,6 +126,8 @@ export type HostToView =
   | { t: 'status'; status: Partial<Status> }
   | { t: 'config'; config: ViewConfig }
   | { t: 'fileMatches'; query: string; files: string[] }
+  // Definitions found in the project for macros the renderer did not know (names without backslash).
+  | { t: 'macros'; macros: Record<string, string>; sources: Record<string, string>; unresolved: Record<string, string> }
   | { t: 'todos'; threadId: string; todos: Todo[] }
   | { t: 'focusThread'; threadId: string }
   | { t: 'prefill'; text: string }
@@ -150,6 +152,7 @@ export type ViewToHost =
   | { t: 'setConfig'; config: Partial<ViewConfig> }
   | { t: 'openLink'; href: string }
   | { t: 'findFiles'; query: string }
+  | { t: 'findMacros'; names: string[] }
   | { t: 'refreshStatus' }
   | { t: 'runUpdate' }
   | { t: 'log'; text: string }
