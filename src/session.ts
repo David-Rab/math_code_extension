@@ -27,6 +27,7 @@ import type { HostToView, ImageAttachment, Item, Status, ViewConfig, ViewToHost,
 import type { WarmPool } from './warm';
 import { readConfig, log, claudeExecutable } from './config';
 import { openLink } from './links';
+import { savedCompactions } from './compactions';
 import { lastUsed, rememberLastUsed, type LastUsed } from './prefs';
 
 type Pending =
@@ -89,6 +90,9 @@ export function buildOptions(cwd: string, hooks: () => SessionHooks | undefined,
     forwardSubagentText: true,
     perTaskStopAffordance: true,
     enableFileCheckpointing: true, // needed for "rewind code"
+    // Since Claude Code 2.1.296 a session started through the SDK has no checklist tools (TaskCreate…)
+    // unless this is set; the progress list above the message box is built from them. Your own setting wins.
+    env: { ...process.env, CLAUDE_CODE_ENABLE_TODO_TOOLS: process.env.CLAUDE_CODE_ENABLE_TODO_TOOLS ?? '1' } as Record<string, string>,
     // In VS Code Restricted Mode the folder's own Claude settings (hooks, MCP servers, rules) are never loaded.
     settingSources: vscode.workspace.isTrusted ? ['user', 'project', 'local'] : ['user'],
     systemPrompt: { type: 'preset', preset: 'claude_code', append: VSCODE_CONTEXT },
@@ -243,6 +247,17 @@ export class ChatSession {
       // Not finished when last saved: it may still be running in another window, or it was cut off.
       for (const t of this.transcript.threads.values())
         if (t.status === 'running' && t.id !== 'main') this.transcript.updateThread(t.id, { status: 'unknown', endedAt: undefined });
+      // Compactions before the latest one are only in the saved files: counted in the background.
+      void savedCompactions(id)
+        .then((c) => {
+          if (this.disposed) return;
+          this.transcript.setCompactions('main', c.main.count, c.main.last);
+          for (const [agentId, n] of Object.entries(c.agents)) {
+            const thread = this.transcript.threadForAgent(agentId);
+            if (thread !== 'main') this.transcript.setCompactions(thread, n.count, n.last);
+          }
+        })
+        .catch((e) => log(`compactions: ${(e as Error).message}`));
       const age = info?.lastModified ? Date.now() - info.lastModified : Infinity;
       if (age < ACTIVE_ELSEWHERE_MS && !writtenOnlyHere(id, info?.lastModified)) {
         this.activeElsewhere = true;

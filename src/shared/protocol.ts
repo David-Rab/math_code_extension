@@ -15,7 +15,11 @@ export interface ThreadMeta {
   startedAt?: number;
   endedAt?: number;
   contextTokens?: number; // subagent: size of its conversation at its latest reply
+  effort?: string; // subagent: the effort level its Agent call asked for, when it named one
   activity?: string; // one line on what it is doing right now
+  /** How many times this conversation was compacted (earlier messages replaced by a summary). */
+  compactions?: number;
+  lastCompaction?: { at?: number; fromTokens?: number; auto?: boolean };
 }
 
 export interface Todo {

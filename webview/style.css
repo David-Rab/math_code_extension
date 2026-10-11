@@ -177,6 +177,7 @@ button:disabled { opacity: 0.5; cursor: default !important; }
 .statusbar select option { background: var(--vscode-dropdown-background); color: var(--vscode-dropdown-foreground); }
 .stat { white-space: nowrap; cursor: default; }
 a.stat { color: var(--vscode-textLink-foreground); cursor: pointer; text-decoration: none; }
+.stat.compacted { color: var(--vscode-editorWarning-foreground, #cca700); }
 .sep { width: 1px; height: 12px; background: var(--border); }
 .grow { flex: 1; }
 .toggle { background: none; border: 1px solid transparent; border-radius: 3px; padding: 0 5px; cursor: pointer; color: var(--muted); }

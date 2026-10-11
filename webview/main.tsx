@@ -183,7 +183,7 @@ function App() {
       <Attention active={thread.id} />
       <Progress todos={s.todos[thread.id] ?? []} threadId={thread.id} />
       <Composer status={s.status} thread={thread} config={s.config} />
-      <StatusBar status={s.status} config={s.config} />
+      <StatusBar status={s.status} config={s.config} main={s.threads.find((t) => t.id === 'main')} />
     </div>
   );
 }
@@ -270,17 +270,31 @@ function shownThreads(threads: ThreadMeta[], active: string): ThreadMeta[] {
   return threads.filter((t) => !isCommand(t) || t.status === 'running' || t.id === active);
 }
 
+/** "compacted ×2" once a conversation has been compacted (earlier messages replaced by a summary). */
+function compacted(t: ThreadMeta | undefined): string {
+  return t?.compactions ? `compacted ×${t.compactions}` : '';
+}
+
+/** When and from what size the latest compaction happened, for a tooltip. */
+function compactionDetail(t: ThreadMeta): string {
+  const n = t.compactions ?? 0;
+  const last = t.lastCompaction;
+  const when = last?.at ? new Date(last.at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
+  const how = [when, last?.fromTokens ? `from ${fmtTokens(last.fromTokens)} tokens` : '', last?.auto === true ? 'automatic' : last?.auto === false ? 'asked for' : ''].filter(Boolean).join(', ');
+  return `Compacted ${n} time${n === 1 ? '' : 's'}${how ? ` (latest: ${how})` : ''}.\nEach compaction replaces the earlier conversation with a summary, so details from before it can be lost.`;
+}
+
 /** What kind of agent a map row is and how it stands: type, model, effort, mode, context, status, time, actions. */
 function mapMeta(t: ThreadMeta, status: Status, now: number, actions: number): string {
   const count = `${actions} action${actions === 1 ? '' : 's'}`;
   if (t.id !== 'main') {
     const context = t.contextTokens ? `context ${fmtTokens(t.contextTokens)}` : '';
     const background = t.background && !isCommand(t) ? 'background' : '';
-    return [t.agentType, shortModel(t.model), background, statusWord(t.status), elapsed(t, now), context, isCommand(t) ? '' : count].filter(Boolean).join(' · ');
+    return [t.agentType, shortModel(t.model), t.effort ? `effort ${t.effort}` : '', background, statusWord(t.status), elapsed(t, now), context, compacted(t), isCommand(t) ? '' : count].filter(Boolean).join(' · ');
   }
   const mode = MODES.find(([v]) => v === status.permissionMode)?.[1] ?? status.permissionMode;
   const context = status.contextPercent === undefined ? '' : `context ${status.contextPercent}%${status.contextTokens ? ` (${fmtTokens(status.contextTokens)} of ${fmtTokens(status.contextMax)})` : ''}`;
-  return [shortModel(status.model), status.effort ? `effort ${status.effort}` : '', mode, context, statusWord(t.status), count].filter(Boolean).join(' · ');
+  return [shortModel(status.model), status.effort ? `effort ${status.effort}` : '', mode, context, compacted(t), statusWord(t.status), count].filter(Boolean).join(' · ');
 }
 
 function AgentMap({ threads, items, active, status }: { threads: ThreadMeta[]; items: Record<string, Item[]>; active: string; status: Status }) {
@@ -550,7 +564,7 @@ function SubagentHeader({ thread }: { thread: ThreadMeta }) {
         <strong>{thread.title}</strong>
         <span class="muted">
           {' '}
-          · {[thread.agentType, shortModel(thread.model), thread.background ? 'background' : '', statusWord(thread.status), thread.contextTokens ? `context ${fmtTokens(thread.contextTokens)}` : ''].filter(Boolean).join(' · ')}
+          · {[thread.agentType, shortModel(thread.model), thread.background ? 'background' : '', statusWord(thread.status), thread.contextTokens ? `context ${fmtTokens(thread.contextTokens)}` : '', compacted(thread)].filter(Boolean).join(' · ')}
         </span>
       </div>
       {thread.status === 'running' && thread.taskId && (
@@ -1239,7 +1253,7 @@ function resetIn(t?: number) {
   return mins < 60 ? ` (resets in ${mins} min)` : mins < 48 * 60 ? ` (resets in ${Math.round(mins / 60)} h)` : ` (resets in ${Math.round(mins / 1440)} d)`;
 }
 
-function StatusBar({ status, config }: { status: Status; config: ViewConfig }) {
+function StatusBar({ status, config, main }: { status: Status; config: ViewConfig; main?: ThreadMeta }) {
   const model = status.models.find((m) => m.value === status.modelChoice);
   const efforts = model?.effortLevels ?? status.models.find((m) => m.value === 'default')?.effortLevels ?? [];
   const modes = MODES.some(([v]) => v === status.permissionMode) || !status.permissionMode ? MODES : [...MODES, [status.permissionMode, status.permissionMode] as [string, string]];
@@ -1277,6 +1291,11 @@ function StatusBar({ status, config }: { status: Status; config: ViewConfig }) {
       <span class="stat" title={`Context: ${fmtTokens(status.contextTokens)} of ${fmtTokens(status.contextMax)} tokens\n${ctxTitle ?? ''}`} onClick={() => send({ t: 'refreshStatus' })}>
         ctx {status.contextPercent ?? '–'}%
       </span>
+      {main?.compactions ? (
+        <span class="stat compacted" title={compactionDetail(main)}>
+          {compacted(main)}
+        </span>
+      ) : null}
       <span class="stat" title="Share of the last turn's input read from the prompt cache">
         cache {status.cacheHitPercent ?? '–'}%
       </span>

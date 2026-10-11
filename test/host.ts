@@ -8,6 +8,7 @@ import { openLink } from '../src/links';
 import { cleanLastUsed, initPrefs, lastUsed, rememberLastUsed, onLastUsedChange } from '../src/prefs';
 import { launchSettings, buildOptions } from '../src/session';
 import { reportBody } from '../src/report';
+import { savedCompactions } from '../src/compactions';
 import { arrange, cleanGroupName, cleanOrganizer, forget, groupNames, initOrganizer, organizer, renameGroup, setGroup, setPinned } from '../src/organize';
 import { Transcript } from '../src/transcript';
 
@@ -84,6 +85,7 @@ rememberLastUsed({ permissionMode: 'auto' });
 Object.assign(settings, { initialModel: '', initialPermissionMode: '' });
 check('a new tab starts with what you picked last', JSON.stringify(launchSettings()) === '{"model":"opus","effort":"xhigh","permissionMode":"auto"}', launchSettings());
 const opts = buildOptions(proj, () => undefined);
+check('checklist tools are asked for (off by default for SDK sessions since Claude Code 2.1.296)', (opts.env as any)?.CLAUDE_CODE_ENABLE_TODO_TOOLS === '1' && (opts.env as any)?.PATH === process.env.PATH);
 check('…as launch options', opts.model === 'opus' && opts.effort === 'xhigh' && opts.permissionMode === 'auto', { model: opts.model, effort: opts.effort, mode: opts.permissionMode });
 Object.assign(settings, { initialModel: 'haiku', initialPermissionMode: 'plan' });
 check('the "initial" settings win over what you picked last', launchSettings().model === 'haiku' && launchSettings().permissionMode === 'plan', launchSettings());
@@ -121,6 +123,26 @@ Object.assign(settings, { initialPermissionMode: '' });
   check('unpinning and deleting leave nothing behind', organizer().pins.length === 0 && JSON.stringify(organizer().groups) === JSON.stringify({ [id(3)]: 'Paper' }), organizer());
   renameGroup('Paper', undefined);
   check('removing a group keeps its sessions, ungrouped', groupNames().length === 0 && arrange(list, organizer()).rest.length === 5);
+}
+
+// --- compactions counted from saved conversation files ----------------------
+{
+  const projects = path.join(root, 'projects');
+  const sid = '00000000-0000-4000-8000-0000000000aa';
+  const dir = path.join(projects, 'C--some-project');
+  fs.mkdirSync(path.join(dir, sid, 'subagents'), { recursive: true });
+  const line = (o: unknown) => JSON.stringify(o);
+  const boundary = (ts: string, pre: number, trigger = 'auto') => line({ type: 'system', subtype: 'compact_boundary', timestamp: ts, compactMetadata: { trigger, preTokens: pre } });
+  fs.writeFileSync(
+    path.join(dir, `${sid}.jsonl`),
+    [line({ type: 'user', message: { content: 'the words "compact_boundary" in a message do not count' } }), boundary('2026-10-01T10:00:00Z', 900000), 'not json "compact_boundary"', line({ type: 'assistant' }), boundary('2026-10-02T11:00:00Z', 500000, 'manual')].join('\n') + '\n',
+  );
+  fs.writeFileSync(path.join(dir, sid, 'subagents', 'agent-a1b2.jsonl'), boundary('2026-10-02T12:00:00Z', 300000) + '\n');
+  fs.writeFileSync(path.join(dir, sid, 'subagents', 'agent-quiet.jsonl'), line({ type: 'user' }) + '\n');
+  const c = await savedCompactions(sid, projects);
+  check('compactions are counted from the saved file, real ones only', c.main.count === 2 && c.main.last?.fromTokens === 500000 && c.main.last?.auto === false && c.main.last?.at === Date.parse('2026-10-02T11:00:00Z'), c.main);
+  check("…and each subagent's own", JSON.stringify(Object.keys(c.agents)) === '["a1b2"]' && c.agents.a1b2.count === 1, c.agents);
+  check('an unknown or malformed conversation id counts nothing', (await savedCompactions('00000000-0000-4000-8000-0000000000bb', projects)).main.count === 0 && (await savedCompactions('../../x', projects)).main.count === 0);
 }
 
 // --- problem report ---------------------------------------------------------

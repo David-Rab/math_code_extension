@@ -22,7 +22,8 @@ and adds a clean conversation view, a tab per subagent, and rendered math.
   Code Marketplace or Open VSX.** A build contains Anthropic's proprietary
   Claude Code binary and SDK, which this repository's license does not cover.
 - Some features rely on undocumented or experimental SDK options
-  (`workspaceTrust`, `enableRemoteControl`, `usage_EXPERIMENTAL_…`) that may
+  (`workspaceTrust`, `enableRemoteControl`, `usage_EXPERIMENTAL_…`, the
+  `CLAUDE_CODE_ENABLE_TODO_TOOLS` environment variable for the progress list) that may
   change or stop working in a future Claude Code release.
 
 ## Features
@@ -36,7 +37,11 @@ and adds a clean conversation view, a tab per subagent, and rendered math.
   the follow-up message shown there.
   **Agent map** (⌬, Ctrl+Shift+M): a tree of all agents with their kind, model,
   context size, status, running time, actions and what each is doing now; the
-  main agent also shows its effort, permission mode and context %.
+  main agent also shows its effort, permission mode and context %. A subagent's
+  effort is shown when its launch names one.
+- **Compactions:** the status bar shows how many times the conversation was
+  compacted ("compacted ×2", with when and from what size on hover), counted
+  live and from the saved conversation; subagents show theirs in the agent map.
 - **Math:** KaTeX for `$…$`, `$$…$$`, `\(…\)`, `\[…\]` and `align`-style
   environments; ∑ toggles to source. `\F \Q \C \E` built in, more via the
   `mathMacros` setting.

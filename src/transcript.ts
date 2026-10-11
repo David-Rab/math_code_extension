@@ -108,6 +108,22 @@ export class Transcript {
     return (agentId && this.taskToThread.get(agentId)) || 'main';
   }
 
+  /** One more compaction of a conversation, as it happens (or as a saved transcript shows it). */
+  private addCompaction(threadId: string, last: NonNullable<ThreadMeta['lastCompaction']>) {
+    this.updateThread(threadId, { compactions: (this.threads.get(threadId)?.compactions ?? 0) + 1, lastCompaction: last });
+  }
+
+  /**
+   * The number of compactions counted in the saved conversation file itself. A
+   * saved transcript read back starts at its latest compaction, so earlier ones
+   * are only known from the file.
+   */
+  setCompactions(threadId: string, count: number, last?: ThreadMeta['lastCompaction']) {
+    const t = this.threads.get(threadId);
+    if (!t || count <= (t.compactions ?? 0)) return;
+    this.updateThread(threadId, { compactions: count, lastCompaction: last ?? t.lastCompaction });
+  }
+
   setMainRunning(running: boolean) {
     this.updateThread('main', running ? { status: 'running' } : { status: 'done', activity: undefined });
   }
@@ -290,6 +306,7 @@ export class Transcript {
         title,
         agentType,
         model: input.model,
+        effort: typeof input.effort === 'string' && /^[a-z]{1,10}$/.test(input.effort) ? input.effort : undefined,
         parentId: threadId,
         status: 'running',
         background: !!input.run_in_background,
@@ -406,7 +423,10 @@ export class Transcript {
     }
     if (m.isCompactSummary) {
       // The summary that replaced the earlier conversation (a saved transcript holds it as a user message).
-      if (history) this.notice(threadId, 'info', threadId === 'main' ? 'Conversation compacted.' : "This agent's earlier conversation was compacted; what is saved starts here.");
+      if (history) {
+        this.addCompaction(threadId, { at: m.timestamp ? ts(m) : undefined });
+        this.notice(threadId, 'info', threadId === 'main' ? 'Conversation compacted.' : "This agent's earlier conversation was compacted; what is saved starts here.");
+      }
       return;
     }
     // A later message from the main agent, as the subagent's own saved transcript holds it.
@@ -513,8 +533,25 @@ export class Transcript {
         // One line on what Claude is doing right now (null when there is nothing to say).
         this.updateThread('main', { activity: typeof m.detail === 'string' && m.detail.trim() ? short(m.detail, 160) : undefined });
         return {};
-      case 'compact_boundary':
-        this.notice('main', 'info', 'Conversation compacted.');
+      case 'compact_boundary': {
+        const threadId = this.threads.has(m.parent_tool_use_id) ? m.parent_tool_use_id : this.threadForAgent(m.agent_id);
+        const meta = m.compact_metadata ?? {};
+        this.addCompaction(threadId, { at: ts(m), fromTokens: typeof meta.pre_tokens === 'number' ? meta.pre_tokens : undefined, auto: meta.trigger ? meta.trigger === 'auto' : undefined });
+        this.notice(threadId, 'info', threadId === 'main' ? 'Conversation compacted.' : "This agent's conversation was compacted.");
+        return {};
+      }
+      case 'permission_check_status':
+        // Auto mode is taking a moment to decide whether a tool call is allowed.
+        this.updateThread(this.threadForAgent(m.agent_id), { activity: m.status === 'checking' ? 'Checking that this action is allowed' : undefined });
+        return {};
+      case 'file_attachments_missing': {
+        const missing = Array.isArray(m.missing) ? m.missing.length : 0;
+        if (missing) this.notice('main', 'warn', `${missing} of ${m.sent_count ?? missing} attached file${(m.sent_count ?? missing) === 1 ? '' : 's'} sent from another device did not arrive.`);
+        return {};
+      }
+      case 'instruction_size_warning':
+        if (typeof m.total_chars === 'number' && typeof m.total_limit_chars === 'number')
+          this.notice('main', 'warn', `Your instruction files (CLAUDE.md and rules${m.file_count ? `, ${m.file_count} file${m.file_count === 1 ? '' : 's'}` : ''}) hold ${m.total_chars.toLocaleString('en')} characters, over Claude Code's limit of ${m.total_limit_chars.toLocaleString('en')}: Claude may not follow all of them.`);
         return {};
       case 'api_retry':
         this.notice('main', 'warn', `API error, retrying (attempt ${m.attempt ?? '?'}${m.max_retries ? ` of ${m.max_retries}` : ''})…`);

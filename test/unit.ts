@@ -204,6 +204,39 @@ const toolResult = (id: string, content: any, extra: any = {}) => ({ type: 'user
   check('history: a compaction summary is a short notice, and system notes are not shown as your messages', shown.length === 2 && shown[0].kind === 'notice' && shown[1].kind === 'user' && shown[1].text === 'next question', shown.map((i) => i.kind));
 }
 
+// --- compactions are counted; events new in Claude Code 2.1.296
+{
+  const t = new Transcript();
+  t.handle({ type: 'system', subtype: 'compact_boundary', compact_metadata: { trigger: 'auto', pre_tokens: 970_000 }, timestamp: '2026-10-04T07:24:22Z' });
+  t.handle({ type: 'system', subtype: 'compact_boundary', compact_metadata: { trigger: 'manual', pre_tokens: 400_000 } });
+  const main = t.threads.get('main')!;
+  check('each compaction is counted, with when and from what size', main.compactions === 2 && main.lastCompaction?.fromTokens === 400_000 && main.lastCompaction?.auto === false, main);
+  check('…and noted in the conversation', (t.items.get('main') ?? []).filter((i) => i.kind === 'notice' && /compacted/.test(i.text)).length === 2);
+  t.setCompactions('main', 1);
+  check('a lower count from the saved file does not replace it', t.threads.get('main')!.compactions === 2);
+  t.setCompactions('main', 5, { at: 1, fromTokens: 9 });
+  check('a higher count from the saved file does', t.threads.get('main')!.compactions === 5 && t.threads.get('main')!.lastCompaction?.fromTokens === 9);
+
+  const h = new Transcript();
+  h.handle({ type: 'user', isCompactSummary: true, parent_tool_use_id: null, message: { content: 'summary' } }, true);
+  check('history: the compaction a saved transcript starts with is counted', h.threads.get('main')!.compactions === 1);
+
+  t.handle(asst([{ type: 'tool_use', id: 'ag', name: 'Agent', input: { description: 'helper', prompt: 'p', effort: 'xhigh' } }]));
+  check("a subagent's effort is known when its Agent call names one", t.threads.get('ag')?.effort === 'xhigh', t.threads.get('ag'));
+  t.handle(asst([{ type: 'tool_use', id: 'ag2', name: 'Agent', input: { description: 'helper', prompt: 'p', effort: { odd: 1 } } }]));
+  check('…and absent otherwise', t.threads.get('ag2')?.effort === undefined);
+
+  t.setMainRunning(true);
+  const r1 = t.handle({ type: 'system', subtype: 'permission_check_status', tool_use_id: 'x', status: 'checking' });
+  check('a slow permission check shows as activity', !r1.unknown && /allowed/.test(t.threads.get('main')!.activity ?? ''), t.threads.get('main'));
+  t.handle({ type: 'system', subtype: 'permission_check_status', tool_use_id: 'x', status: 'done' });
+  check('…and clears when decided', t.threads.get('main')!.activity === undefined);
+  const r2 = t.handle({ type: 'system', subtype: 'instruction_size_warning', total_chars: 90000, total_limit_chars: 40000, file_count: 3 });
+  const r3 = t.handle({ type: 'system', subtype: 'file_attachments_missing', message_uuid: 'm', sent_count: 3, missing: [{ file_uuid: 'a', reason: 'timeout' }] });
+  const warns = (t.items.get('main') ?? []).filter((i) => i.kind === 'notice' && i.level === 'warn').map((i: any) => i.text);
+  check('instruction size and missing attachments are warnings, not "unsupported"', !r2.unknown && !r3.unknown && warns.some((w) => /90,000 characters/.test(w)) && warns.some((w) => /1 of 3 attached files/.test(w)), warns);
+}
+
 // --- history: images, uuids and fork points
 {
   const t = new Transcript();
