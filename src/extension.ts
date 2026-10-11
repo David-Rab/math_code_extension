@@ -11,6 +11,7 @@ import { checkAuth, signIn } from './auth';
 import { initTrust } from './trust';
 import { reportProblem, saveReport } from './report';
 import { initPrefs, onLastUsedChange } from './prefs';
+import { ensureMacroFile, initMacroFile, macroFilePath, reloadMacroFile } from './macros';
 import { arrange, cleanGroupName, forget, groupNames, initOrganizer, organizer, renameGroup, setGroup, setPinned } from './organize';
 
 const VIEW_TYPE = 'claudePanel.chat';
@@ -36,6 +37,9 @@ export function activate(ctx: vscode.ExtensionContext) {
   initTrust(ctx.globalState);
   initPrefs(ctx.globalState);
   initOrganizer(ctx.globalState);
+  initMacroFile(ctx.globalStorageUri.fsPath);
+  // Edits made in another VS Code window (or another editor) are picked up too: one file stat every few seconds.
+  macroPoll = setInterval(macrosChanged, 4000);
   // New tabs start with the model, effort and mode you picked last: replace a spare started with the old ones.
   onLastUsedChange(() => warm.refresh());
 
@@ -65,6 +69,16 @@ export function activate(ctx: vscode.ExtensionContext) {
     }),
     vscode.commands.registerCommand('claudePanel.checkForUpdates', () => checkForUpdates(ctx, true)),
     vscode.commands.registerCommand('claudePanel.showLog', showLog),
+    vscode.commands.registerCommand('claudePanel.editMacros', async () => {
+      const file = ensureMacroFile();
+      if (file) await vscode.window.showTextDocument(vscode.Uri.file(file));
+    }),
+    // A saved change to your macro file applies to open panels at once.
+    vscode.workspace.onDidSaveTextDocument((doc) => {
+      const file = macroFilePath();
+      if (file && doc.uri.scheme === 'file' && doc.uri.fsPath.toLowerCase() === file.toLowerCase()) macrosChanged();
+    }),
+    { dispose: () => clearInterval(macroPoll) },
     vscode.window.registerTreeDataProvider('claudePanel.sessions', history),
     // VS Code restores open panels when a window is reopened or reloaded;
     // the saved state carries the session id.
@@ -98,6 +112,14 @@ export function activate(ctx: vscode.ExtensionContext) {
   void checkAuth().then((a) => log(`signed in: ${a?.loggedIn ?? 'unknown'}`));
   if (readConfig().checkForUpdates) scheduleUpdateChecks(ctx, 15000);
 }
+
+/** Read the macro file again and, if its macros changed, give them to every open panel. */
+function macrosChanged() {
+  if (!reloadMacroFile()) return;
+  const view = readConfig().view;
+  for (const s of sessions) s.pushConfig(view);
+}
+let macroPoll: ReturnType<typeof setInterval> | undefined;
 
 export function deactivate() {
   for (const s of sessions) s.dispose();

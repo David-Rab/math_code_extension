@@ -43,8 +43,14 @@ and adds a clean conversation view, a tab per subagent, and rendered math.
   compacted ("compacted ×2", with when and from what size on hover), counted
   live and from the saved conversation; subagents show theirs in the agent map.
 - **Math:** KaTeX for `$…$`, `$$…$$`, `\(…\)`, `\[…\]` and `align`-style
-  environments; ∑ toggles to source. `\F \Q \C \E` built in, more via the
-  `mathMacros` setting.
+  environments; ∑ toggles to source. `\F \Q \C \E` built in.
+- **Your own macros:** the command **MathPanel: Edit Math Macros** opens a file
+  of yours, written as in a LaTeX preamble (`\newcommand`, `\renewcommand`,
+  `\DeclareMathOperator`, `\DeclarePairedDelimiter`, `\def`, `\let`; you can
+  paste a whole preamble). A saved change applies to open panels at once. The
+  file lives in the extension's user-level storage; the panel reads no project
+  file for macros. The `mathMacros` setting (JSON) also works and wins over
+  the file.
 - **Copy as Markdown:** selecting text in the conversation and pressing Ctrl+C
   copies exactly the selection as Markdown source (headings, lists, tables,
   emphasis, links, code, and each formula as the LaTeX it was written with), so
@@ -139,6 +145,7 @@ in full, and the panel log.
 | `src/auth.ts`, `src/trust.ts` | sign-in and folder trust via Claude Code |
 | `src/notify.ts`, `src/report.ts`, `src/updates.ts` | notifications, problem reports, updates |
 | `src/links.ts`, `src/prefs.ts`, `src/organize.ts` | opening links from replies; the model, effort and mode remembered for new tabs; session pins and groups |
+| `src/macros.ts`, `src/compactions.ts` | your own macro file (LaTeX definitions for KaTeX); compaction counts from saved conversations |
 | `webview/` | the panel UI (Preact), Markdown + KaTeX renderer, styles |
 | `test/` | replay, unit, host (fake VS Code), renderer, e2e, trust e2e, benchmark harness |
 

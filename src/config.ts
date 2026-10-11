@@ -3,6 +3,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import type { ViewConfig } from './shared/protocol';
+import { fileMacros } from './macros';
 
 export interface Config {
   view: ViewConfig;
@@ -22,7 +23,8 @@ export function readConfig(): Config {
       toolActivity: c.get('toolActivity', 'summary'),
       showThinking: c.get('showThinking', false),
       enterToSend: c.get('enterToSend', true),
-      mathMacros: c.get('mathMacros', {}),
+      // Your macro file, then the setting (which wins where both define a name).
+      mathMacros: { ...fileMacros(), ...c.get<Record<string, string>>('mathMacros', {}) },
     },
     claudeExecutable: c.get('claudeExecutable', ''),
     initialModel: c.get('initialModel', ''),

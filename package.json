@@ -2,7 +2,7 @@
   "name": "mathpanel",
   "displayName": "MathPanel (unofficial)",
   "description": "Unofficial conversation-first panel for Claude Code: subagent tabs, LaTeX rendering, status bar. Not affiliated with Anthropic.",
-  "version": "0.5.287",
+  "version": "0.7.296",
   "publisher": "david-local",
   "private": true,
   "license": "MIT",
@@ -120,6 +120,11 @@
         "title": "Remove Group (keeps its sessions)",
         "category": "MathPanel",
         "icon": "$(close)"
+      },
+      {
+        "command": "claudePanel.editMacros",
+        "title": "Edit Math Macros",
+        "category": "MathPanel"
       }
     ],
     "viewsContainers": {
@@ -347,7 +352,7 @@
           "additionalProperties": {
             "type": "string"
           },
-          "markdownDescription": "Extra KaTeX macros, e.g. `{\"\\Gal\": \"\\operatorname{Gal}\"}`. Built in: `F`, `Q`, `C`, `E` as blackboard bold.",
+          "markdownDescription": "Extra KaTeX macros as JSON, e.g. `{\"\\\\Gal\": \"\\\\operatorname{Gal}\"}`. Easier: the command **MathPanel: Edit Math Macros** opens your own macro file, written as in a LaTeX preamble (`\\newcommand`, `\\DeclareMathOperator`, …). Built in: `F`, `Q`, `C`, `E` as blackboard bold. This setting wins over the file.",
           "scope": "application"
         },
         "claudePanel.sound": {

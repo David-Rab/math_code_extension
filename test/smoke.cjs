@@ -19,6 +19,7 @@ const vscode = new Proxy(
     workspace: {
       onDidChangeConfiguration: noop,
       onDidGrantWorkspaceTrust: noop,
+      onDidSaveTextDocument: noop,
       isTrusted: true,
       getConfiguration: () => ({ get: (k, d) => (k === 'prewarm' || k === 'checkForUpdates' ? false : d) }),
       workspaceFolders: undefined,
@@ -36,7 +37,7 @@ Module._load = function (request, ...rest) {
 };
 const ext = require(path.resolve('dist/extension.cjs'));
 const globalState = { get: () => undefined, update: async () => {}, keys: () => [] };
-ext.activate({ subscriptions: [], extensionUri: { fsPath: process.cwd() }, extensionPath: process.cwd(), globalState });
+ext.activate({ subscriptions: [], extensionUri: { fsPath: process.cwd() }, extensionPath: process.cwd(), globalState, globalStorageUri: { fsPath: process.env.TEMP } });
 console.log('activated OK; commands:', registered.join(', '));
 ext.deactivate();
 process.exit(0);

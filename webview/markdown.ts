@@ -22,7 +22,11 @@ export function setMacros(user: Record<string, string> | undefined) {
   macros = { ...BUILTIN_MACROS, ...(user ?? {}) };
   texCache.clear();
   htmlCache.clear();
+  epoch++;
 }
+let epoch = 0;
+/** Changes whenever the macros do: rendered text a component kept is then out of date. */
+export const macroEpoch = () => epoch;
 
 const texCache = new Map<string, string>();
 /**

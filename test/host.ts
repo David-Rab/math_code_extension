@@ -9,6 +9,8 @@ import { cleanLastUsed, initPrefs, lastUsed, rememberLastUsed, onLastUsedChange 
 import { launchSettings, buildOptions } from '../src/session';
 import { reportBody } from '../src/report';
 import { savedCompactions } from '../src/compactions';
+import { TEMPLATE, ensureMacroFile, fileMacros, initMacroFile, macroFilePath, parseMacros, reloadMacroFile } from '../src/macros';
+import { readConfig } from '../src/config';
 import { arrange, cleanGroupName, cleanOrganizer, forget, groupNames, initOrganizer, organizer, renameGroup, setGroup, setPinned } from '../src/organize';
 import { Transcript } from '../src/transcript';
 
@@ -123,6 +125,59 @@ Object.assign(settings, { initialPermissionMode: '' });
   check('unpinning and deleting leave nothing behind', organizer().pins.length === 0 && JSON.stringify(organizer().groups) === JSON.stringify({ [id(3)]: 'Paper' }), organizer());
   renameGroup('Paper', undefined);
   check('removing a group keeps its sessions, ungrouped', groupNames().length === 0 && arrange(list, organizer()).rest.length === 5);
+}
+
+// --- your own macro file ------------------------------------------------------
+{
+  const defs = parseMacros(
+    [
+      '\\newcommand{\\equi}{\\operatorname{Isom}}',
+      '\\newcommand\\Fam{\\mathcal{C}}   % a comment with \\newcommand{\\fake}{x}',
+      '\\renewcommand*{\\pair}[2]{\\langle #1, #2 \\rangle}',
+      '\\providecommand{\\nested}{\\mathbf{a_{b_{c}}}}',
+      '\\DeclareMathOperator{\\Hom}{Hom}',
+      '\\DeclareMathOperator*{\\colim}{colim}',
+      '\\DeclarePairedDelimiter{\\abs}{\\lvert}{\\rvert}',
+      '\\def\\R{\\mathbb{R}}',
+      '\\def\\two#1#2{#1+#2}',
+      '\\let\\eps\\varepsilon',
+      '\\newcommand{\\opt}[2][default]{#1 #2}', // optional argument: cannot be expressed
+      '\\def\\delim(#1){#1}', // delimited parameters: cannot be expressed
+      '\\definecolor{x}{rgb}{1,0,0}', // not \\def
+      '\\usepackage{amsmath} \\begin{document} text \\end{document}', // the rest of a preamble is ignored
+      '\\newcommand{\\percent}{50\\% of it}',
+      '\\newcommand{\\equi}{\\operatorname{Isom}^+}', // a later definition wins
+    ].join('\n'),
+  );
+  const want: Record<string, string> = {
+    equi: '\\operatorname{Isom}^+',
+    Fam: '\\mathcal{C}',
+    pair: '\\langle #1, #2 \\rangle',
+    nested: '\\mathbf{a_{b_{c}}}',
+    Hom: '\\operatorname{Hom}',
+    colim: '\\operatorname*{colim}',
+    abs: '\\lvert #1 \\rvert',
+    R: '\\mathbb{R}',
+    two: '#1+#2',
+    eps: '\\varepsilon',
+    percent: '50\\% of it',
+  };
+  check('macro definitions are read as written in a LaTeX preamble', JSON.stringify(Object.entries(defs).sort()) === JSON.stringify(Object.entries(want).sort()), defs);
+  check('the file you are given to start with defines nothing by itself', Object.keys(parseMacros(TEMPLATE)).length === 0, parseMacros(TEMPLATE));
+
+  const store = path.join(root, 'storage');
+  initMacroFile(store);
+  check('no macro file yet: no macros, and nothing is created by reading', Object.keys(fileMacros()).length === 0 && !fs.existsSync(store));
+  const mf = ensureMacroFile()!;
+  check('the edit command creates the file, with its explanation', mf === macroFilePath() && fs.readFileSync(mf, 'utf8') === TEMPLATE && path.dirname(mf) === store);
+  fs.writeFileSync(mf, TEMPLATE + '\\newcommand{\\equi}{\\cong}\n\\DeclareMathOperator{\\Stab}{Stab}\n');
+  check('a saved change is picked up', reloadMacroFile() === true && JSON.stringify(fileMacros()) === JSON.stringify({ '\\equi': '\\cong', '\\Stab': '\\operatorname{Stab}' }), fileMacros());
+  check('…and reported only when something changed', reloadMacroFile() === false);
+  Object.assign(settings, { mathMacros: { '\\Stab': '\\mathrm{St}', '\\Gal': '\\operatorname{Gal}' } });
+  check('the panel gets the file and the setting together; the setting wins', JSON.stringify(readConfig().view.mathMacros) === JSON.stringify({ '\\equi': '\\cong', '\\Stab': '\\mathrm{St}', '\\Gal': '\\operatorname{Gal}' }), readConfig().view.mathMacros);
+  Object.assign(settings, { mathMacros: {} });
+  fs.rmSync(mf);
+  check('a removed file means no macros again', reloadMacroFile() === true && Object.keys(fileMacros()).length === 0);
 }
 
 // --- compactions counted from saved conversation files ----------------------

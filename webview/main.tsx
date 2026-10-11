@@ -2,7 +2,7 @@ import { render } from 'preact';
 import { memo } from 'preact/compat';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { HostToView, ImageAttachment, Item, Snapshot, Status, ThreadMeta, Todo, ViewConfig, ViewToHost, Question } from '../src/shared/protocol';
-import { renderMarkdown, setRenderMath, setMacros, splitDraft } from './markdown';
+import { renderMarkdown, setRenderMath, setMacros, splitDraft, macroEpoch } from './markdown';
 import { selectionToMarkdown } from './copy';
 
 declare function acquireVsCodeApi(): { postMessage(m: unknown): void; getState(): any; setState(s: any): void };
@@ -769,7 +769,7 @@ function UserMessage({ item, math }: { item: Extract<Item, { kind: 'user' }>; ma
 
 // `breaks`: every line break you typed is kept (your own messages); Claude's replies follow Markdown, where a single one is a space.
 const Markdown = ({ text, math, breaks = false }: { text: string; math: boolean; breaks?: boolean }) => {
-  const html = useMemo(() => renderMarkdown(text, true, breaks), [text, math, breaks]);
+  const html = useMemo(() => renderMarkdown(text, true, breaks), [text, math, breaks, macroEpoch()]);
   return <div class="md" dangerouslySetInnerHTML={{ __html: html }} />;
 };
 
@@ -1253,6 +1253,13 @@ function resetIn(t?: number) {
   return mins < 60 ? ` (resets in ${mins} min)` : mins < 48 * 60 ? ` (resets in ${Math.round(mins / 60)} h)` : ` (resets in ${Math.round(mins / 1440)} d)`;
 }
 
+/** For the math toggle's tooltip: your own macros, and where to define more. */
+function macroNote(config: ViewConfig): string {
+  const names = Object.keys(config.mathMacros);
+  const list = names.length > 40 ? `${names.slice(0, 40).join(' ')} … (${names.length})` : names.join(' ');
+  return `${String.fromCharCode(10, 10)}Your macros: ${list || 'none yet'}${String.fromCharCode(10)}Define them with the command “MathPanel: Edit Math Macros”.`;
+}
+
 function StatusBar({ status, config, main }: { status: Status; config: ViewConfig; main?: ThreadMeta }) {
   const model = status.models.find((m) => m.value === status.modelChoice);
   const efforts = model?.effortLevels ?? status.models.find((m) => m.value === 'default')?.effortLevels ?? [];
@@ -1317,7 +1324,7 @@ function StatusBar({ status, config, main }: { status: Status; config: ViewConfi
           open
         </a>
       )}
-      <button class={`toggle ${config.renderMath ? 'on' : ''}`} title="Render LaTeX math" onClick={() => setConfig({ renderMath: !config.renderMath })}>
+      <button class={`toggle ${config.renderMath ? 'on' : ''}`} title={`Render LaTeX math${macroNote(config)}`} onClick={() => setConfig({ renderMath: !config.renderMath })}>
         ∑
       </button>
       <select

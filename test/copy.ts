@@ -21,9 +21,12 @@ if (process.env.COPY_EXTRA) for (const [i, text] of (JSON.parse(fs.readFileSync(
 const partial = 'Start of para with $a^2+b^2$ inside and **bold words** after.\n\n- item one\n- item two\n- item three\n\n3. third\n4. fourth\n5. fifth\n\n```js\nconst x = 1;\nconst y = 2;\n```\n\n| A | B |\n|---|--:|\n| a1 | b1 |\n| a2 | b2 |';
 const mine = 'line one\nline two\n\nnew paragraph with $x^2$';
 
+// A reply that uses macros of your own: unknown until your macro file defines them.
+const usesMacros = 'The map is $\\equi P_k$, for sets in $\\Fam$, and $\\Zed$ stays undefined. Again $\\equi$ and $\\Fam$.';
+
 const snapshot = {
   threads: [{ id: 'main', title: 'Main', status: 'done' }],
-  items: { main: [...samples.map(([, text], i) => ({ kind: 'text', id: `s${i}`, text })), { kind: 'text', id: 'partial', text: partial }, { kind: 'user', id: 'mine', text: mine }] },
+  items: { main: [...samples.map(([, text], i) => ({ kind: 'text', id: `s${i}`, text })), { kind: 'text', id: 'partial', text: partial }, { kind: 'user', id: 'mine', text: mine }, { kind: 'text', id: 'macros', text: usesMacros }] },
   drafts: {},
   todos: {},
   status: { models: [], commands: [], remote: { state: 'off' }, busy: false, starting: false, sessionId: 'demo' },
@@ -34,7 +37,7 @@ const snapshot = {
 async function inPage(snap: unknown, sampleCount: number) {
   const frame = () => new Promise<void>((r) => requestAnimationFrame(() => r()));
   window.postMessage({ t: 'snapshot', snapshot: snap }, '*');
-  for (let i = 0; i < 400 && document.querySelectorAll('.msg').length < sampleCount + 2; i++) await frame();
+  for (let i = 0; i < 400 && document.querySelectorAll('.msg').length < sampleCount + 3; i++) await frame();
   for (let i = 0; i < 5; i++) await frame();
 
   const copy = (range: Range): string | null => {
@@ -95,7 +98,20 @@ async function inPage(snap: unknown, sampleCount: number) {
     'two messages at once': between(document.querySelector('.thread')!, 'fifth', 'line one'),
     'the message box is left to the browser': fromBox.defaultPrevented ? 'taken over' : null,
   };
-  document.getElementById('perf')!.textContent = JSON.stringify({ errors: (window as any).__errors, whole, parts });
+  // Your macro file is saved with two definitions: the host sends the new settings to the open panel.
+  const withMacros = replies[replies.length - 1];
+  const undefinedNow = () => [...withMacros.innerHTML.matchAll(/color:#cc0000;?">\\([A-Za-z]+)</g)].map((m) => m[1]);
+  const before = undefinedNow();
+  window.postMessage({ t: 'config', config: { ...(snap as any).config, mathMacros: { '\\equi': '\\cong', '\\Fam': '\\mathcal C' } } }, '*');
+  for (let i = 0; i < 10; i++) await frame();
+  const macros = {
+    before,
+    after: undefinedNow(),
+    formulas: withMacros.querySelectorAll('.katex').length,
+    copied: all(withMacros),
+    tooltip: [...document.querySelectorAll('.statusbar .toggle')].map((b) => b.getAttribute('title') ?? '').find((t) => t.startsWith('Render LaTeX math')) ?? '',
+  };
+  document.getElementById('perf')!.textContent = JSON.stringify({ errors: (window as any).__errors, whole, parts, macros });
 }
 
 const out = '.test/harness/copy.html';
@@ -148,5 +164,10 @@ const expected: Record<string, string | null> = {
 for (const [name, want] of Object.entries(expected)) check(`selection: ${name}`, report.parts[name] === want, `copied: ${JSON.stringify(report.parts[name])}`);
 const two = report.parts['two messages at once'] ?? '';
 check('selection: two messages at once, without the buttons between them', two.startsWith('5. fifth\n\n```js\nconst x = 1;') && two.endsWith('| a2 | b2 |\n\nline one') && !/[⧉↶]/.test(two), `copied: ${JSON.stringify(two)}`);
+const m = (report as unknown as { macros: { before: string[]; after: string[]; formulas: number; copied: string | null; tooltip: string } }).macros;
+check('macros of your own: unknown ones are shown as written until defined', JSON.stringify(m.before) === '["equi","Fam","Zed","equi","Fam"]', m.before);
+check('…a saved macro file redraws the messages already on screen', JSON.stringify(m.after) === '["Zed"]' && m.formulas === 5, m);
+check('…copying still gives the source as written', m.copied === usesMacros, m.copied);
+check('…the math toggle lists your macros and how to define more', m.tooltip.includes('Your macros: \\equi \\Fam') && m.tooltip.includes('Edit Math Macros'), m.tooltip);
 console.log(failed ? `\n${failed} failed` : '\nall passed');
 process.exit(failed ? 1 : 0);
