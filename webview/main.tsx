@@ -2,7 +2,7 @@ import { render } from 'preact';
 import { memo } from 'preact/compat';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { HostToView, ImageAttachment, Item, Snapshot, Status, ThreadMeta, Todo, ViewConfig, ViewToHost, Question } from '../src/shared/protocol';
-import { renderMarkdown, setRenderMath, setMacros, splitDraft, onUnknownMacros, macroEpoch } from './markdown';
+import { renderMarkdown, setRenderMath, setMacros, splitDraft } from './markdown';
 import { selectionToMarkdown } from './copy';
 
 declare function acquireVsCodeApi(): { postMessage(m: unknown): void; getState(): any; setState(s: any): void };
@@ -47,10 +47,6 @@ window.addEventListener('message', (e: MessageEvent<HostToView>) => {
     for (const l of fileListeners) l(e.data.query, e.data.files);
     return;
   }
-  if (e.data.t === 'macros') {
-    gotMacros(e.data);
-    return;
-  }
   if (e.data.t === 'prefill') {
     for (const l of prefillListeners) l(e.data.text);
     return;
@@ -70,7 +66,7 @@ function flush() {
   for (const m of batch) s = apply(s, m);
   state = s;
   setRenderMath(state.config.renderMath);
-  setMacros(state.config.mathMacros, projectMacros);
+  setMacros(state.config.mathMacros);
   setVersion(++version);
 }
 
@@ -119,47 +115,6 @@ function apply(s: State, m: HostToView): State {
     default:
       return s;
   }
-}
-
-// A paper's own macros. A formula that uses a macro the renderer does not know reports its name;
-// each name is asked for once, a moment later, so one reply's unknown macros go in one request.
-// Nothing is asked, and nothing is read on disk, for conversations whose formulas are all standard.
-let projectMacros: Record<string, string> = {};
-const macroNotes = { sources: {} as Record<string, string>, unresolved: {} as Record<string, string> };
-const askedMacros = new Set<string>();
-let toAsk: string[] = [];
-let askTimer: ReturnType<typeof setTimeout> | undefined;
-onUnknownMacros((names) => {
-  for (const n of names) {
-    if (askedMacros.has(n)) continue;
-    askedMacros.add(n);
-    toAsk.push(n);
-  }
-  if (!toAsk.length || askTimer) return;
-  askTimer = setTimeout(() => {
-    askTimer = undefined;
-    send({ t: 'findMacros', names: toAsk.splice(0) });
-  }, 60);
-});
-
-function gotMacros(m: Extract<HostToView, { t: 'macros' }>) {
-  Object.assign(macroNotes.sources, m.sources);
-  Object.assign(macroNotes.unresolved, m.unresolved);
-  if (!Object.keys(m.macros).length) return;
-  projectMacros = { ...projectMacros, ...Object.fromEntries(Object.entries(m.macros).map(([name, body]) => [`\\${name}`, body])) };
-  setMacros(state.config.mathMacros, projectMacros);
-  // A new config object: every message draws again, now with the macros.
-  state = { ...state, config: { ...state.config } };
-  setVersion(++version);
-}
-
-/** For the tooltip of the math toggle: which macros came from the project, and which were left alone. */
-function macroNote(): string {
-  const byFile = new Map<string, string[]>();
-  for (const [name, file] of Object.entries(macroNotes.sources)) byFile.set(file, [...(byFile.get(file) ?? []), `\\${name}`]);
-  const found = [...byFile].map(([file, names]) => `${names.join(' ')}  (${file})`);
-  const left = Object.entries(macroNotes.unresolved).map(([name, why]) => `\\${name}: ${why}`);
-  return (found.length ? `\n\nMacros taken from your project:\n${found.join('\n')}` : '') + (left.length ? `\n\nLeft as written, because the project does not agree on them:\n${left.join('\n')}` : '');
 }
 
 function setShowMap(on: boolean) {
@@ -814,7 +769,7 @@ function UserMessage({ item, math }: { item: Extract<Item, { kind: 'user' }>; ma
 
 // `breaks`: every line break you typed is kept (your own messages); Claude's replies follow Markdown, where a single one is a space.
 const Markdown = ({ text, math, breaks = false }: { text: string; math: boolean; breaks?: boolean }) => {
-  const html = useMemo(() => renderMarkdown(text, true, breaks), [text, math, breaks, macroEpoch()]);
+  const html = useMemo(() => renderMarkdown(text, true, breaks), [text, math, breaks]);
   return <div class="md" dangerouslySetInnerHTML={{ __html: html }} />;
 };
 
@@ -1362,7 +1317,7 @@ function StatusBar({ status, config, main }: { status: Status; config: ViewConfi
           open
         </a>
       )}
-      <button class={`toggle ${config.renderMath ? 'on' : ''}`} title={`Render LaTeX math${macroNote()}`} onClick={() => setConfig({ renderMath: !config.renderMath })}>
+      <button class={`toggle ${config.renderMath ? 'on' : ''}`} title="Render LaTeX math" onClick={() => setConfig({ renderMath: !config.renderMath })}>
         ∑
       </button>
       <select

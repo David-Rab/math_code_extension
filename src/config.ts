@@ -12,7 +12,6 @@ export interface Config {
   remoteControl: 'auto' | 'on' | 'off';
   prewarm: boolean;
   checkForUpdates: boolean;
-  projectMacros: boolean;
 }
 
 export function readConfig(): Config {
@@ -31,7 +30,6 @@ export function readConfig(): Config {
     remoteControl: c.get('remoteControl', 'auto'),
     prewarm: c.get('prewarm', true),
     checkForUpdates: c.get('checkForUpdates', true),
-    projectMacros: c.get('projectMacros', true),
   };
 }
 

@@ -28,7 +28,6 @@ import type { WarmPool } from './warm';
 import { readConfig, log, claudeExecutable } from './config';
 import { openLink } from './links';
 import { savedCompactions } from './compactions';
-import { findMacros } from './macros';
 import { lastUsed, rememberLastUsed, type LastUsed } from './prefs';
 
 type Pending =
@@ -747,15 +746,6 @@ export class ChatSession {
         return;
       case 'openLink':
         return openLink(m.href, this.cwd);
-      case 'findMacros': {
-        // Reads the project's TeX files: not in VS Code Restricted Mode, and only when the setting is on.
-        if (!vscode.workspace.isTrusted || !readConfig().projectMacros) return;
-        const names = [...new Set((Array.isArray(m.names) ? m.names : []).filter((n): n is string => typeof n === 'string' && /^[A-Za-z]{1,40}$/.test(n)))].slice(0, 60);
-        if (!names.length) return;
-        const found = await findMacros(names, this.cwd, this.transcript.texFiles().map((f) => path.resolve(this.cwd, f)), () => texFiles(this.cwd));
-        this.post({ t: 'macros', ...found });
-        return;
-      }
       case 'findFiles': {
         const files = await findFiles(m.query, this.cwd);
         this.post({ t: 'fileMatches', query: m.query, files });
@@ -933,12 +923,6 @@ async function updateViewConfig(patch: Partial<ViewConfig>) {
     toolActivity: (v) => v === 'hidden' || v === 'summary' || v === 'detailed',
   };
   for (const [k, v] of Object.entries(patch)) if (valid[k]?.(v)) await c.update(k, v, vscode.ConfigurationTarget.Global);
-}
-
-/** Every TeX source in the project (the file search skips what VS Code is set to exclude). */
-async function texFiles(cwd: string): Promise<string[]> {
-  const uris = await vscode.workspace.findFiles(new vscode.RelativePattern(cwd, '**/*.{tex,sty,cls}'), '**/{node_modules,.git,dist,out,build}/**', 3000);
-  return uris.map((u) => u.fsPath);
 }
 
 async function findFiles(q: string, cwd: string): Promise<string[]> {

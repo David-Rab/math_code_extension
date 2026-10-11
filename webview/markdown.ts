@@ -15,37 +15,13 @@ export function setRenderMath(on: boolean) {
 const BUILTIN_MACROS: Record<string, string> = { '\\F': '\\mathbb{F}', '\\Q': '\\mathbb{Q}', '\\C': '\\mathbb{C}', '\\E': '\\mathbb{E}' };
 let macros: Record<string, string> = { ...BUILTIN_MACROS };
 let macrosKey = '';
-let epoch = 0;
-/**
- * `user`: the mathMacros setting. `project`: definitions found in the project's
- * own TeX files for macros that were unknown. The setting wins over the
- * project, and both over the built-in shorthands.
- */
-export function setMacros(user: Record<string, string> | undefined, project: Record<string, string> = {}) {
-  const key = JSON.stringify([user ?? {}, project]);
+export function setMacros(user: Record<string, string> | undefined) {
+  const key = JSON.stringify(user ?? {});
   if (key === macrosKey) return;
   macrosKey = key;
-  macros = { ...BUILTIN_MACROS, ...project, ...(user ?? {}) };
+  macros = { ...BUILTIN_MACROS, ...(user ?? {}) };
   texCache.clear();
   htmlCache.clear();
-  epoch++;
-}
-/** Changes whenever the macros do: rendered text kept by a component is then out of date. */
-export const macroEpoch = () => epoch;
-
-let unknown: ((names: string[]) => void) | undefined;
-/** Called with macro names (no backslash) a formula used that are not defined, or that only a built-in shorthand defines. */
-export function onUnknownMacros(cb: (names: string[]) => void) {
-  unknown = cb;
-}
-function reportUnknown(src: string, out: string) {
-  if (!unknown) return;
-  const names = new Set<string>();
-  // KaTeX draws an undefined command in its error colour, or names it in the error when the whole formula fails.
-  if (out.includes('#cc0000')) for (const m of out.matchAll(/color:#cc0000;?">\\([A-Za-z]+)<|Undefined control sequence: \\([A-Za-z]+)/g)) names.add(m[1] ?? m[2]);
-  // A paper may define \F, \Q, \C or \E itself: its meaning then replaces the shorthand.
-  for (const m of src.matchAll(/\\([FQCE])(?![A-Za-z])/g)) names.add(m[1]);
-  if (names.size) unknown([...names]);
 }
 
 const texCache = new Map<string, string>();
@@ -69,7 +45,6 @@ function tex(src: string, display: boolean, source: string): string {
     }
     if (texCache.size > 3000) texCache.clear();
     texCache.set(key, out);
-    reportUnknown(src, out);
   }
   return display ? `<div class="math-display"${data}>${out}</div>` : `<span class="math-inline"${data}>${out}</span>`;
 }

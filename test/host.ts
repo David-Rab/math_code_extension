@@ -9,7 +9,6 @@ import { cleanLastUsed, initPrefs, lastUsed, rememberLastUsed, onLastUsedChange 
 import { launchSettings, buildOptions } from '../src/session';
 import { reportBody } from '../src/report';
 import { savedCompactions } from '../src/compactions';
-import { findMacros, inputsOf, parseMacros } from '../src/macros';
 import { arrange, cleanGroupName, cleanOrganizer, forget, groupNames, initOrganizer, organizer, renameGroup, setGroup, setPinned } from '../src/organize';
 import { Transcript } from '../src/transcript';
 
@@ -124,78 +123,6 @@ Object.assign(settings, { initialPermissionMode: '' });
   check('unpinning and deleting leave nothing behind', organizer().pins.length === 0 && JSON.stringify(organizer().groups) === JSON.stringify({ [id(3)]: 'Paper' }), organizer());
   renameGroup('Paper', undefined);
   check('removing a group keeps its sessions, ungrouped', groupNames().length === 0 && arrange(list, organizer()).rest.length === 5);
-}
-
-// --- a paper's own macros ----------------------------------------------------
-{
-  const defs = parseMacros(
-    [
-      '\\newcommand{\\equi}{\\operatorname{Isom}}',
-      '\\newcommand\\Fam{\\mathcal{C}}   % a comment with \\newcommand{\\fake}{x}',
-      '\\renewcommand*{\\pair}[2]{\\langle #1, #2 \\rangle}',
-      '\\providecommand{\\nested}{\\mathbf{a_{b_{c}}}}',
-      '\\DeclareMathOperator{\\Hom}{Hom}',
-      '\\DeclareMathOperator*{\\colim}{colim}',
-      '\\DeclarePairedDelimiter{\\abs}{\\lvert}{\\rvert}',
-      '\\def\\R{\\mathbb{R}}',
-      '\\def\\two#1#2{#1+#2}',
-      '\\let\\eps\\varepsilon',
-      '\\newcommand{\\opt}[2][default]{#1 #2}', // optional argument: cannot be expressed
-      '\\def\\delim(#1){#1}', // delimited parameters: cannot be expressed
-      '\\definecolor{x}{rgb}{1,0,0}', // not \\def
-      '\\newcommand{\\percent}{50\\% of it}',
-      '\\newcommand{\\equi}{\\operatorname{Isom}^+}', // a later definition wins
-    ].join('\n'),
-  );
-  const want: Record<string, string> = {
-    equi: '\\operatorname{Isom}^+',
-    Fam: '\\mathcal{C}',
-    pair: '\\langle #1, #2 \\rangle',
-    nested: '\\mathbf{a_{b_{c}}}',
-    Hom: '\\operatorname{Hom}',
-    colim: '\\operatorname*{colim}',
-    abs: '\\lvert #1 \\rvert',
-    R: '\\mathbb{R}',
-    two: '#1+#2',
-    eps: '\\varepsilon',
-    percent: '50\\% of it',
-  };
-  check('macro definitions are read from TeX source', JSON.stringify(Object.entries(defs).sort()) === JSON.stringify(Object.entries(want).sort()), defs);
-  check('files a source loads are found', JSON.stringify(inputsOf('\\input{preamble}\n\\usepackage[utf8]{inputenc, mymacros}\n% \\input{commented}\n\\include{ch/one}')) === '["preamble","inputenc","mymacros","ch/one"]');
-
-  // A project with two papers that define \equi differently, and one macro everyone agrees on.
-  const proj2 = path.join(root, 'papers');
-  const w = (f: string, text: string) => (fs.mkdirSync(path.dirname(path.join(proj2, f)), { recursive: true }), fs.writeFileSync(path.join(proj2, f), text));
-  w('a/paper.tex', '\\input{preamble}\n\\newcommand{\\Fam}{\\mathcal{C}}\n\\begin{document}x\\end{document}');
-  w('a/preamble.tex', '\\newcommand{\\equi}{\\operatorname{Isom}}\n\\DeclareMathOperator{\\Stab}{Stab}');
-  w('b/other.tex', '\\newcommand{\\equi}{\\mathrm{iso}}\n\\DeclareMathOperator{\\Stab}{Stab}\n\\newcommand{\\only}{\\beta}');
-  w('b/third.tex', '\\DeclareMathOperator{\\Stab}{Stab}');
-  fs.writeFileSync(path.join(root, 'outside.tex'), '\\newcommand{\\secret}{\\alpha}');
-  const all = async () => ['a/paper.tex', 'a/preamble.tex', 'b/other.tex', 'b/third.tex'].map((f) => path.join(proj2, f)).concat(path.join(root, 'outside.tex'));
-  let listed = 0;
-  const counting = async () => (listed++, all());
-
-  const inPaper = await findMacros(['equi', 'Fam', 'Stab'], proj2, [path.join(proj2, 'a/paper.tex')], counting);
-  check("the conversation's own paper decides, through the files it loads", inPaper.macros.equi === '\\operatorname{Isom}' && inPaper.macros.Fam === '\\mathcal{C}' && inPaper.macros.Stab === '\\operatorname{Stab}' && inPaper.sources.equi === 'a/paper.tex', inPaper);
-  check('…without looking at the rest of the project', listed === 0);
-  const other = await findMacros(['equi'], proj2, [path.join(proj2, 'b/other.tex'), path.join(proj2, 'a/paper.tex')], counting);
-  check('the most recently used paper wins', other.macros.equi === '\\mathrm{iso}', other);
-  const none = await findMacros(['equi', 'Stab', 'only', 'nowhere', 'secret', 'bad name', '../x'], proj2, [], counting);
-  check('with no paper in the conversation: used only when the whole project agrees', none.macros.Stab === '\\operatorname{Stab}' && none.macros.only === '\\beta' && !('equi' in none.macros), none.macros);
-  check('contradicting definitions are not guessed between, and say why', /2 different ways across 2 files/.test(none.unresolved.equi ?? ''), none.unresolved);
-  check('files outside the project are never used', !('secret' in none.macros) && !('secret' in (await findMacros(['secret'], proj2, [path.join(root, 'outside.tex')], all)).macros));
-  check('a file that loads a file outside the project does not reach it', (w('a/escape.tex', '\\input{../../outside}'), !('secret' in (await findMacros(['secret'], proj2, [path.join(proj2, 'a/escape.tex')], async () => [])).macros)));
-  // A shared preamble in another folder (TeX finds it through its search path).
-  w('c/paper.tex', '\\input{shared}\n\\usepackage{amsmath}');
-  w('lib/shared.tex', '\\newcommand{\\equi}{\\cong}');
-  const withLib = async () => [...(await all()), path.join(proj2, 'c/paper.tex'), path.join(proj2, 'lib/shared.tex')];
-  check('a preamble loaded from elsewhere in the project is followed when its name is unique', (await findMacros(['equi'], proj2, [path.join(proj2, 'c/paper.tex')], withLib)).macros.equi === '\\cong');
-  w('lib2/shared.tex', '\\newcommand{\\equi}{\\simeq}');
-  const twoLibs = async () => [...(await withLib()), path.join(proj2, 'lib2/shared.tex')];
-  const ambiguous = await findMacros(['equi'], proj2, [path.join(proj2, 'c/paper.tex')], twoLibs);
-  check('…and not when two files share that name', !('equi' in ambiguous.macros) && /different ways/.test(ambiguous.unresolved.equi ?? ''), ambiguous);
-  w('a/preamble.tex', '\\newcommand{\\equi}{\\operatorname{Isom}_0}');
-  check('an edited file is read again', (await findMacros(['equi'], proj2, [path.join(proj2, 'a/paper.tex')], all)).macros.equi === '\\operatorname{Isom}_0');
 }
 
 // --- compactions counted from saved conversation files ----------------------

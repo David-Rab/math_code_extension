@@ -2,7 +2,7 @@
   "name": "mathpanel",
   "displayName": "MathPanel (unofficial)",
   "description": "Unofficial conversation-first panel for Claude Code: subagent tabs, LaTeX rendering, status bar. Not affiliated with Anthropic.",
-  "version": "0.6.296",
+  "version": "0.5.287",
   "publisher": "david-local",
   "private": true,
   "license": "MIT",
@@ -349,11 +349,6 @@
           },
           "markdownDescription": "Extra KaTeX macros, e.g. `{\"\\Gal\": \"\\operatorname{Gal}\"}`. Built in: `F`, `Q`, `C`, `E` as blackboard bold.",
           "scope": "application"
-        },
-        "claudePanel.projectMacros": {
-          "type": "boolean",
-          "default": true,
-          "description": "When a formula uses a macro the math renderer does not know, look up its definition (\\newcommand, \\DeclareMathOperator, \\def) in the project's .tex and .sty files: first in the files Claude read in that conversation, else anywhere in the project if every definition there agrees. Not used in Restricted Mode."
         },
         "claudePanel.sound": {
           "type": "string",

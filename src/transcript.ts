@@ -77,8 +77,6 @@ export class Transcript {
   readonly drafts = new Map<string, string>();
   readonly todos = new Map<string, Todo[]>();
   private toolIndex = new Map<string, { threadId: string; itemId: string }>();
-  /** TeX files Claude read or edited in this conversation, latest last. */
-  private tex: string[] = [];
   private taskToThread = new Map<string, string>(); // task_id / agentId -> thread id
   private pendingTaskCreates = new Map<string, { threadId: string; tempId: string }>();
   /** Running foreground tasks that are not agents, kept in case they move to the background. */
@@ -108,11 +106,6 @@ export class Transcript {
 
   threadForAgent(agentId: string | undefined): string {
     return (agentId && this.taskToThread.get(agentId)) || 'main';
-  }
-
-  /** The TeX files this conversation worked with, most recent first: where a paper's own macros are looked up first. */
-  texFiles(): string[] {
-    return [...this.tex].reverse();
   }
 
   /** One more compaction of a conversation, as it happens (or as a saved transcript shows it). */
@@ -304,8 +297,6 @@ export class Transcript {
 
   private onToolUse(threadId: string, b: any, m: any, history: boolean) {
     if (b.name === 'SendMessage') this.onSendMessage(b, history);
-    const file = b.input?.file_path ?? b.input?.path;
-    if (typeof file === 'string' && /\.(tex|sty|cls)$/i.test(file)) this.tex = [...this.tex.filter((f) => f !== file), file].slice(-40);
     if (AGENT_TOOLS.has(b.name)) {
       const input = b.input ?? {};
       const title = input.description || input.name || 'Subagent';
