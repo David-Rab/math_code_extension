@@ -153,4 +153,5 @@ export type ViewToHost =
   | { t: 'refreshStatus' }
   | { t: 'runUpdate' }
   | { t: 'log'; text: string }
-  | { t: 'report'; text: string; images?: ImageAttachment[] };
+  | { t: 'report'; text: string; images?: ImageAttachment[] }
+  | { t: 'editMacros' };

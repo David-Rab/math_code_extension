@@ -754,6 +754,9 @@ export class ChatSession {
       case 'refreshStatus':
         await this.refreshContext();
         return;
+      case 'editMacros':
+        await vscode.commands.executeCommand('claudePanel.editMacros');
+        return;
       case 'report':
         if (typeof m.text === 'string' && (m.text.trim() || validImages(m.images).length)) await this.host.saveReport(this, m.text.slice(0, 100_000), validImages(m.images));
         return;

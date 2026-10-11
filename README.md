@@ -44,7 +44,7 @@ and adds a clean conversation view, a tab per subagent, and rendered math.
   live and from the saved conversation; subagents show theirs in the agent map.
 - **Math:** KaTeX for `$…$`, `$$…$$`, `\(…\)`, `\[…\]` and `align`-style
   environments; ∑ toggles to source. `\F \Q \C \E` built in.
-- **Your own macros:** the command **MathPanel: Edit Math Macros** opens a file
+- **Your own macros:** the **macros** button next to ∑ (or the command **MathPanel: Edit Math Macros**) opens a file
   of yours, written as in a LaTeX preamble (`\newcommand`, `\renewcommand`,
   `\DeclareMathOperator`, `\DeclarePairedDelimiter`, `\def`, `\let`; you can
   paste a whole preamble). A saved change applies to open panels at once. The

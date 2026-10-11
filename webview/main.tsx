@@ -1257,7 +1257,7 @@ function resetIn(t?: number) {
 function macroNote(config: ViewConfig): string {
   const names = Object.keys(config.mathMacros);
   const list = names.length > 40 ? `${names.slice(0, 40).join(' ')} … (${names.length})` : names.join(' ');
-  return `${String.fromCharCode(10, 10)}Your macros: ${list || 'none yet'}${String.fromCharCode(10)}Define them with the command “MathPanel: Edit Math Macros”.`;
+  return `Edit your math macros: opens your macro file, written as in a LaTeX preamble.\nSaving it redraws the conversation.\n\nYour macros: ${list || 'none yet'}`;
 }
 
 function StatusBar({ status, config, main }: { status: Status; config: ViewConfig; main?: ThreadMeta }) {
@@ -1324,8 +1324,11 @@ function StatusBar({ status, config, main }: { status: Status; config: ViewConfi
           open
         </a>
       )}
-      <button class={`toggle ${config.renderMath ? 'on' : ''}`} title={`Render LaTeX math${macroNote(config)}`} onClick={() => setConfig({ renderMath: !config.renderMath })}>
+      <button class={`toggle ${config.renderMath ? 'on' : ''}`} title="Render LaTeX math" onClick={() => setConfig({ renderMath: !config.renderMath })}>
         ∑
+      </button>
+      <button class="toggle macros" title={macroNote(config)} onClick={() => send({ t: 'editMacros' })}>
+        macros
       </button>
       <select
         title="Tool activity"

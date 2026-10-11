@@ -109,7 +109,11 @@ async function inPage(snap: unknown, sampleCount: number) {
     after: undefinedNow(),
     formulas: withMacros.querySelectorAll('.katex').length,
     copied: all(withMacros),
-    tooltip: [...document.querySelectorAll('.statusbar .toggle')].map((b) => b.getAttribute('title') ?? '').find((t) => t.startsWith('Render LaTeX math')) ?? '',
+    tooltip: [...document.querySelectorAll('.statusbar .toggle')].map((b) => b.getAttribute('title') ?? '').find((t) => t.startsWith('Edit your math macros')) ?? '',
+    opens: (() => {
+      (document.querySelector('.statusbar .macros') as HTMLElement).click();
+      return ((window as any).__sent as { t: string }[]).filter((x) => x.t === 'editMacros').length;
+    })(),
   };
   document.getElementById('perf')!.textContent = JSON.stringify({ errors: (window as any).__errors, whole, parts, macros });
 }
@@ -123,10 +127,11 @@ fs.writeFileSync(
 <body><div id="root"></div><pre id="perf" style="display:none"></pre>
 <script>
 window.__errors = [];
+window.__sent = [];
 window.onerror = (m) => { window.__errors.push(String(m)); };
 const inPage = ${inPage.toString()};
 window.acquireVsCodeApi = () => ({
-  postMessage(m) { if (m.t === 'ready') inPage(${JSON.stringify(snapshot).replace(/</g, '\\u003c')}, ${samples.length}).catch((e) => { document.getElementById('perf').textContent = JSON.stringify({ errors: [String(e && e.stack || e)], whole: [], parts: {} }); }); },
+  postMessage(m) { window.__sent.push(m); if (m.t === 'ready') inPage(${JSON.stringify(snapshot).replace(/</g, '\\u003c')}, ${samples.length}).catch((e) => { document.getElementById('perf').textContent = JSON.stringify({ errors: [String(e && e.stack || e)], whole: [], parts: {} }); }); },
   getState() { return {}; },
   setState() {},
 });
@@ -168,6 +173,6 @@ const m = (report as unknown as { macros: { before: string[]; after: string[]; f
 check('macros of your own: unknown ones are shown as written until defined', JSON.stringify(m.before) === '["equi","Fam","Zed","equi","Fam"]', m.before);
 check('…a saved macro file redraws the messages already on screen', JSON.stringify(m.after) === '["Zed"]' && m.formulas === 5, m);
 check('…copying still gives the source as written', m.copied === usesMacros, m.copied);
-check('…the math toggle lists your macros and how to define more', m.tooltip.includes('Your macros: \\equi \\Fam') && m.tooltip.includes('Edit Math Macros'), m.tooltip);
+check('…the macros button lists your macros and asks the host to open your macro file', m.tooltip.includes('Your macros: \\equi \\Fam') && (m as unknown as { opens: number }).opens === 1, m);
 console.log(failed ? `\n${failed} failed` : '\nall passed');
 process.exit(failed ? 1 : 0);
